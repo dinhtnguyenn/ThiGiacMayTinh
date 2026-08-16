@@ -1,6 +1,13 @@
 [
   {
     "date": "2026-08-16",
+    "macrostructure": "Catalogue",
+    "theme": "Coral",
+    "enrichment": "none",
+    "brief": "Minimal Vietnamese three-tab FaceOps interface with automatic camera flows"
+  },
+  {
+    "date": "2026-08-16",
     "macrostructure": "Index-First",
     "theme": "Cobalt",
     "enrichment": "none",
