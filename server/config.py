@@ -23,6 +23,7 @@ class Settings:
     pose_delta_threshold: float
     max_upload_bytes: int
     signing_secret: str
+    admin_token: str
 
     @classmethod
     def from_environment(cls) -> "Settings":
@@ -42,12 +43,17 @@ class Settings:
             pose_delta_threshold=float(os.getenv("FACEOPS_POSE_DELTA_THRESHOLD", "0.06")),
             max_upload_bytes=int(os.getenv("FACEOPS_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
             signing_secret=os.getenv("FACEOPS_SIGNING_SECRET", DEVELOPMENT_SECRET),
+            admin_token=os.getenv("FACEOPS_ADMIN_TOKEN", ""),
         )
 
     def validate_for_startup(self) -> None:
         if self.app_env == "production" and self.signing_secret == DEVELOPMENT_SECRET:
             raise RuntimeError(
                 "FACEOPS_SIGNING_SECRET must be set to a long random value in production."
+            )
+        if self.app_env == "production" and len(self.admin_token) < 24:
+            raise RuntimeError(
+                "FACEOPS_ADMIN_TOKEN must be at least 24 characters in production."
             )
         if self.retention_days < 1:
             raise RuntimeError("FACEOPS_RETENTION_DAYS must be at least one day.")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -22,6 +23,18 @@ class FaceAnalysisError(ValueError):
 class FaceObservation:
     embedding: np.ndarray
     keypoints: np.ndarray
+    bbox: np.ndarray | None = None
+
+
+@dataclass(frozen=True)
+class FaceAnalysisTrace:
+    """Measured timings for the two real stages inside the local face engine."""
+
+    decode_ms: int
+    inference_ms: int
+    image_width: int
+    image_height: int
+    face_count: int
 
 
 class InsightFaceService:
@@ -56,7 +69,9 @@ class InsightFaceService:
                 self._analyzer = analyzer
         return self._analyzer
 
-    def analyze(self, image_bytes: bytes) -> FaceObservation:
+    def analyze_many(self, image_bytes: bytes) -> tuple[list[FaceObservation], FaceAnalysisTrace]:
+        """Extract every detectable face so recognition can handle a shared frame."""
+
         try:
             import cv2
         except ImportError as error:
@@ -64,26 +79,46 @@ class InsightFaceService:
                 "OpenCV is not installed. Install requirements.txt before starting the API."
             ) from error
 
+        decode_started = time.perf_counter()
         encoded = np.frombuffer(image_bytes, dtype=np.uint8)
         image = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
         if image is None:
             raise FaceAnalysisError("invalid_image", "Tệp không phải một ảnh hợp lệ.")
 
+        decode_ms = round((time.perf_counter() - decode_started) * 1000)
+        inference_started = time.perf_counter()
         faces = self._get_analyzer().get(image)
-        if not faces:
+        observations: list[FaceObservation] = []
+        for face in faces:
+            embedding = np.asarray(face.normed_embedding, dtype=np.float32)
+            keypoints = np.asarray(face.kps, dtype=np.float32)
+            bbox = np.asarray(face.bbox, dtype=np.float32)
+            if embedding.ndim != 1 or keypoints.shape[0] < 3 or bbox.shape != (4,):
+                raise FaceAnalysisError("face_model_error", "Model không trả về embedding, landmarks hoặc khung mặt hợp lệ.")
+            observations.append(
+                FaceObservation(
+                    embedding=np.ascontiguousarray(embedding),
+                    keypoints=np.ascontiguousarray(keypoints),
+                    bbox=np.ascontiguousarray(bbox),
+                )
+            )
+        return observations, FaceAnalysisTrace(
+            decode_ms=decode_ms,
+            inference_ms=round((time.perf_counter() - inference_started) * 1000),
+            image_width=int(image.shape[1]),
+            image_height=int(image.shape[0]),
+            face_count=len(observations),
+        )
+
+    def analyze(self, image_bytes: bytes) -> tuple[FaceObservation, FaceAnalysisTrace]:
+        """Keep registration strict: it must receive exactly one consenting person."""
+
+        observations, trace = self.analyze_many(image_bytes)
+        if not observations:
             raise FaceAnalysisError("face_not_found", "Không tìm thấy khuôn mặt trong khung hình.")
-        if len(faces) != 1:
+        if len(observations) != 1:
             raise FaceAnalysisError(
                 "multiple_faces",
-                "Chỉ đặt một khuôn mặt trong khung hình để bảo vệ quyền riêng tư.",
+                "Đăng ký chỉ nhận một khuôn mặt trong khung hình để tránh lưu nhầm dữ liệu.",
             )
-
-        face = faces[0]
-        embedding = np.asarray(face.normed_embedding, dtype=np.float32)
-        keypoints = np.asarray(face.kps, dtype=np.float32)
-        if embedding.ndim != 1 or keypoints.shape[0] < 3:
-            raise FaceAnalysisError("face_model_error", "Model không trả về embedding hoặc landmarks hợp lệ.")
-        return FaceObservation(
-            embedding=np.ascontiguousarray(embedding),
-            keypoints=np.ascontiguousarray(keypoints),
-        )
+        return observations[0], trace

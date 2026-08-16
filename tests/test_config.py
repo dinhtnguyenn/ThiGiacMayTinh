@@ -28,6 +28,17 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "FACEOPS_POSE_DELTA_THRESHOLD"):
             settings.validate_for_startup()
 
+    def test_production_requires_a_long_admin_token(self) -> None:
+        settings = replace(
+            Settings.from_environment(),
+            app_env="production",
+            signing_secret="a-production-signing-secret",
+            admin_token="too-short",
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_ADMIN_TOKEN"):
+            settings.validate_for_startup()
+
 
 if __name__ == "__main__":
     unittest.main()

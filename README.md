@@ -10,20 +10,22 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 | Face recognition | Any device using the same deployed website can identify a face registered on the server. The app shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
 | Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
-## Simple user flow
+## User interface
 
-The public interface deliberately contains only two screens:
+The website has three modules:
 
-1. **Đăng ký** — enter a name, consent to shared server storage, open the webcam, then select **Đăng ký khuôn mặt**.
-2. **Nhận diện** — the app moves here automatically after a successful registration. Select **Nhận diện khuôn mặt** to show the stored name or **Chưa có dữ liệu**.
+1. **Đăng ký** — the page asks for camera permission when it opens. Enter a name, consent to shared server storage, then select **Lưu hồ sơ**; the app opens the camera automatically if no image was selected. Registration accepts exactly one face to avoid assigning consent or a name to the wrong person.
+2. **Nhận diện** — the app moves here automatically after a successful registration. Use a fresh webcam frame or one uploaded image, then select **Nhận diện**. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result.
+3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, rename a profile, or delete one. The token is kept only in the tab's memory and is never written to browser storage.
 
-The simple UI sends a fresh webcam frame in static-image mode. It does not expose the former liveness or notebook controls.
+The simple UI sends either a fresh webcam frame or one selected image in static-image mode. It does not expose the former liveness or notebook controls. While a camera is live, the browser periodically submits an in-memory frame to InsightFace and draws the returned face boxes as tracking overlays. These tracking frames are not stored. After each registration or recognition, it shows a server-provided processing trace: image receipt, OpenCV decoding, InsightFace detection/embedding, and server-side storage or matching. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
 
 ## Shared server storage
 
 - The simple website uses one shared server-side directory. A face registered from device A can be recognized from device B, as long as both devices use the same deployed website and database.
 - The browser does not store a face embedding, image, profile, or workspace token. The SQLite database in the server's persistent `/data` volume stores the name and InsightFace embedding.
-- The API does not return a list of registered names. A name is returned only after a submitted face reaches the configured match threshold.
+- Public recognition requests do not return a list of registered names. A name is returned only after a submitted face reaches the configured match threshold; the administrator-only management API is the sole exception.
+- Directory administration is protected by `FACEOPS_ADMIN_TOKEN`. It is required for `GET`, `PUT`, and `DELETE` requests to `/api/profiles`; public visitors cannot list, rename, or delete profiles.
 - Submitted images are decoded in memory to make an embedding and are not written to the application database or file volume. Configure the reverse proxy and application logs so they do not capture request bodies, tokens, or raw images.
 - Shared profiles are retained in the server database until an administrator deliberately removes them. `FACEOPS_RETENTION_DAYS` applies only to the legacy workspace integration retained for backward compatibility.
 - This makes every successful registration searchable by every visitor to this deployment. Use it only for a consented, controlled group; protect the site with access control if it is not intended to be a fully public directory. Obtain the legal review, consent wording, retention policy, security controls, and incident process applicable in the deployment jurisdiction.
@@ -81,7 +83,7 @@ The Compose file intentionally fails if this variable is absent. This is safer t
 
 The application is deployable as a single container, but a public biometric service needs operational controls around it.
 
-1. Set `FACEOPS_ENV=production` and replace `FACEOPS_SIGNING_SECRET` in `.env` with a long random value. The API refuses to start in production when the development value remains.
+1. Set `FACEOPS_ENV=production`, replace `FACEOPS_SIGNING_SECRET` in `.env` with a long random value, and set `FACEOPS_ADMIN_TOKEN` to a different random value of at least 24 characters. The API refuses to start in production when either secret is missing or unsafe.
 2. Put the container behind an HTTPS reverse proxy such as Caddy, Nginx, Cloudflare, or a managed load balancer. Use the public HTTPS URL for the page; camera access is restricted by browsers on insecure origins outside `localhost`.
 3. Add request size limits, rate limits, WAF/DDoS protection, monitoring, alerting, logs that do not include raw images or tokens, and a restrictive Content Security Policy at the reverse proxy.
 4. Put `/data` and `/models` on encrypted persistent storage, use managed backup policies, and set `FACEOPS_RETENTION_DAYS` to the documented retention period. Establish an administrator-only deletion process before collecting production data.
@@ -97,12 +99,17 @@ The included SQLite database and local Docker volumes are intentionally simple a
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/profiles` | Registers one consented face in the shared server directory. Requires `name`, `consent=true`, `mode`, `image`, and liveness fields when applicable. |
-| `POST /api/recognitions` | Compares one submitted face with the shared server directory. |
-| `GET /api/profiles` | Returns only the number of retained shared profiles, not names or embeddings. |
+| `POST /api/recognitions` | Compares every detected face in one submitted image with the shared server directory. |
+| `POST /api/tracking` | Returns transient InsightFace face-box coordinates for the live camera overlay; it does not persist images or embeddings. |
+| `GET /api/profiles` | Lists shared profile metadata for an administrator only. Requires `X-Admin-Token`. |
+| `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |
+| `DELETE /api/profiles/{profile_id}` | Deletes one shared profile for an administrator only. Requires `X-Admin-Token`. |
 | `POST /api/liveness/challenge` | Creates a one-time 90-second challenge for the shared directory flow. |
 | `POST /api/workspaces`, `POST /api/models/notebook`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 
 Image uploads are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid files, no-face images, and images with more than one face.
+
+Successful `POST /api/profiles` and `POST /api/recognitions` responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
 
 ## Notebook and custom models
 

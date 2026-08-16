@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
@@ -15,7 +17,7 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .database import Database, StoredProfile, Workspace
-from .face_service import FaceAnalysisError, FaceObservation, InsightFaceService
+from .face_service import FaceAnalysisError, FaceAnalysisTrace, FaceObservation, InsightFaceService
 from .liveness import verify_pose_challenge
 
 
@@ -70,6 +72,17 @@ async def require_workspace(
     return workspace
 
 
+async def require_admin(
+    admin_token: Annotated[str | None, Header(alias="X-Admin-Token")] = None,
+) -> None:
+    """Protect directory listing and mutation from public visitors."""
+
+    if not settings.admin_token:
+        api_error(503, "admin_not_configured", "Chức năng quản trị chưa được cấu hình trên máy chủ.")
+    if not admin_token or not secrets.compare_digest(admin_token, settings.admin_token):
+        api_error(401, "admin_auth_required", "Mã quản trị không hợp lệ.")
+
+
 async def read_upload(upload: UploadFile, max_bytes: int) -> bytes:
     data = await upload.read(max_bytes + 1)
     if not data:
@@ -79,10 +92,33 @@ async def read_upload(upload: UploadFile, max_bytes: int) -> bytes:
     return data
 
 
-async def analyze_image(upload: UploadFile) -> FaceObservation:
+def trace_step(component: str, message: str, duration_ms: int | None = None) -> dict[str, object]:
+    step: dict[str, object] = {"component": component, "message": message}
+    if duration_ms is not None:
+        step["duration_ms"] = duration_ms
+    return step
+
+
+async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]]]:
+    observations, steps, _ = await analyze_faces(upload)
+    if len(observations) != 1:
+        api_error(
+            422,
+            "multiple_faces",
+            "Đăng ký chỉ nhận một khuôn mặt trong khung hình để tránh lưu nhầm dữ liệu.",
+        )
+    return observations[0], steps
+
+
+async def analyze_faces(
+    upload: UploadFile,
+    require_face: bool = True,
+) -> tuple[list[FaceObservation], list[dict[str, object]], FaceAnalysisTrace]:
+    read_started = time.perf_counter()
     image_bytes = await read_upload(upload, settings.max_upload_bytes)
+    read_ms = round((time.perf_counter() - read_started) * 1000)
     try:
-        return await run_in_threadpool(face_service.analyze, image_bytes)
+        observations, analysis_trace = await run_in_threadpool(face_service.analyze_many, image_bytes)
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
     except RuntimeError:
@@ -97,6 +133,17 @@ async def analyze_image(upload: UploadFile) -> FaceObservation:
             "face_engine_unavailable",
             "Face engine gặp lỗi khi xử lý ảnh. Hãy thử lại sau.",
         )
+    if require_face and not observations:
+        api_error(422, "face_not_found", "Không tìm thấy khuôn mặt trong khung hình.")
+    return observations, [
+        trace_step("Server", "Đã nhận và kiểm tra tệp ảnh.", read_ms),
+        trace_step("OpenCV", "Đã giải mã ảnh để InsightFace xử lý.", analysis_trace.decode_ms),
+        trace_step(
+            "InsightFace",
+            f"Đã phát hiện {analysis_trace.face_count} khuôn mặt và tạo embedding.",
+            analysis_trace.inference_ms,
+        ),
+    ], analysis_trace
 
 
 async def check_liveness(
@@ -113,7 +160,7 @@ async def check_liveness(
     if not challenge_id or baseline_image is None:
         api_error(422, "liveness_challenge_required", "Hoàn thành liveness challenge trước khi gửi ảnh webcam.")
 
-    baseline_observation = await analyze_image(baseline_image)
+    baseline_observation, _ = await analyze_image(baseline_image)
     if not database.consume_challenge(workspace.id, challenge_id):
         api_error(422, "liveness_challenge_expired", "Challenge đã hết hạn hoặc đã được dùng. Hãy bắt đầu lại.")
     try:
@@ -138,6 +185,14 @@ def profile_payload(profile: StoredProfile) -> dict[str, object]:
         "source_mode": profile.source_mode,
         "created_at": as_iso(profile.created_at),
     }
+
+
+def bounding_box_payload(observation: FaceObservation) -> list[int]:
+    """Return only display coordinates; images and embeddings remain server-side."""
+
+    if observation.bbox is None or observation.bbox.shape != (4,):
+        return [0, 0, 0, 0]
+    return [round(float(value)) for value in observation.bbox]
 
 
 @app.on_event("startup")
@@ -181,8 +236,10 @@ async def create_liveness_challenge(
 
 
 @app.get("/api/profiles")
-async def list_profiles() -> dict[str, object]:
-    """Expose shared entries with names and IDs."""
+async def list_profiles(
+    _: Annotated[None, Depends(require_admin)],
+) -> dict[str, object]:
+    """Return shared directory metadata to an authenticated administrator only."""
 
     profiles = database.profiles_for_public_directory(include_embeddings=False)
     return {
@@ -191,7 +248,10 @@ async def list_profiles() -> dict[str, object]:
     }
 
 @app.delete("/api/profiles/{profile_id}", status_code=204)
-async def delete_profile(profile_id: str) -> Response:
+async def delete_profile(
+    profile_id: str,
+    _: Annotated[None, Depends(require_admin)],
+) -> Response:
     workspace = database.public_workspace()
     deleted = database.delete_profile(workspace.id, profile_id)
     if not deleted:
@@ -202,9 +262,13 @@ class ProfileUpdateRequest(BaseModel):
     name: str
 
 @app.put("/api/profiles/{profile_id}")
-async def update_profile(profile_id: str, payload: ProfileUpdateRequest) -> dict[str, object]:
+async def update_profile(
+    profile_id: str,
+    payload: ProfileUpdateRequest,
+    _: Annotated[None, Depends(require_admin)],
+) -> dict[str, object]:
     clean_name = " ".join(payload.name.split())
-    if not clean_name:
+    if not clean_name or len(clean_name) > 100:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     workspace = database.public_workspace()
     updated = database.update_profile(workspace.id, profile_id, clean_name)
@@ -222,14 +286,16 @@ async def register_profile(
     challenge_id: Annotated[str | None, Form()] = None,
     baseline_image: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
+    request_started = time.perf_counter()
     if not consent:
         api_error(422, "consent_required", "Cần đồng ý lưu tên và embedding khuôn mặt trên server trước khi tiếp tục.")
     clean_name = " ".join(name.split())
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     workspace = database.public_workspace()
-    observation = await analyze_image(image)
+    observation, processing_steps = await analyze_image(image)
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
+    storage_started = time.perf_counter()
     profile = database.add_profile(
         workspace.id,
         clean_name,
@@ -237,7 +303,21 @@ async def register_profile(
         observation.embedding.astype(np.float32).tobytes(),
         int(observation.embedding.size),
     )
-    return {"profile": profile_payload(profile), "liveness": liveness}
+    processing_steps.append(
+        trace_step(
+            "Server",
+            "Đã lưu tên và embedding vào danh bạ server.",
+            round((time.perf_counter() - storage_started) * 1000),
+        )
+    )
+    return {
+        "profile": profile_payload(profile),
+        "liveness": liveness,
+        "processing": {
+            "steps": processing_steps,
+            "total_ms": round((time.perf_counter() - request_started) * 1000),
+        },
+    }
 
 
 @app.post("/api/recognitions")
@@ -247,33 +327,80 @@ async def recognize_face(
     challenge_id: Annotated[str | None, Form()] = None,
     baseline_image: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
+    request_started = time.perf_counter()
     workspace = database.public_workspace()
-    observation = await analyze_image(image)
-    liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
+    observations, processing_steps, analysis_trace = await analyze_faces(image)
+    if mode != "image" and len(observations) != 1:
+        api_error(422, "multiple_faces", "Liveness chỉ hỗ trợ một khuôn mặt trong mỗi yêu cầu.")
+    liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observations[0])
+    lookup_started = time.perf_counter()
     profiles = database.profiles_for_workspace(workspace.id, include_embeddings=True)
-    if not profiles:
-        return {"matched": False, "reason": "no_profiles", "liveness": liveness}
+    processing_steps.append(
+        trace_step(
+            "Server",
+            "Đã nạp embedding đã đăng ký từ danh bạ server.",
+            round((time.perf_counter() - lookup_started) * 1000),
+        )
+    )
+    matching_started = time.perf_counter()
+    recognition_faces: list[dict[str, object]] = []
+    for observation in observations:
+        best_profile: StoredProfile | None = None
+        best_similarity = -1.0
+        for profile in profiles:
+            if profile.embedding_dim != observation.embedding.size:
+                continue
+            candidate = np.frombuffer(profile.embedding, dtype=np.float32)
+            similarity = float(np.dot(observation.embedding, candidate))
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_profile = profile
+        matched = best_profile is not None and best_similarity >= settings.match_threshold
+        recognition_faces.append(
+            {
+                "box": bounding_box_payload(observation),
+                "matched": matched,
+                "similarity": round(best_similarity, 4) if best_profile is not None else None,
+                "profile": profile_payload(best_profile) if matched and best_profile else None,
+            }
+        )
 
-    best_profile: StoredProfile | None = None
-    best_similarity = -1.0
-    for profile in profiles:
-        if profile.embedding_dim != observation.embedding.size:
-            continue
-        candidate = np.frombuffer(profile.embedding, dtype=np.float32)
-        similarity = float(np.dot(observation.embedding, candidate))
-        if similarity > best_similarity:
-            best_similarity = similarity
-            best_profile = profile
-
-    if best_profile is None:
-        return {"matched": False, "reason": "embedding_schema_mismatch", "liveness": liveness}
-    matched = best_similarity >= settings.match_threshold
+    processing_steps.append(
+        trace_step(
+            "Server",
+            f"Đã so khớp {len(observations)} embedding với danh bạ theo ngưỡng đã cấu hình.",
+            round((time.perf_counter() - matching_started) * 1000),
+        )
+    )
+    first_match = next((face for face in recognition_faces if face["matched"]), None)
     return {
-        "matched": matched,
+        "matched": first_match is not None,
         "threshold": settings.match_threshold,
-        "similarity": round(best_similarity, 4),
-        "profile": profile_payload(best_profile) if matched else None,
+        "similarity": first_match["similarity"] if first_match else None,
+        "profile": first_match["profile"] if first_match else None,
+        "faces": recognition_faces,
+        "image_width": analysis_trace.image_width,
+        "image_height": analysis_trace.image_height,
+        "reason": "no_profiles" if not profiles else "no_match",
         "liveness": liveness,
+        "processing": {
+            "steps": processing_steps,
+            "total_ms": round((time.perf_counter() - request_started) * 1000),
+        },
+    }
+
+
+@app.post("/api/tracking")
+async def track_faces(
+    image: Annotated[UploadFile, File()],
+) -> dict[str, object]:
+    """Return live InsightFace boxes only; tracking frames are never stored."""
+
+    observations, _, analysis_trace = await analyze_faces(image, require_face=False)
+    return {
+        "image_width": analysis_trace.image_width,
+        "image_height": analysis_trace.image_height,
+        "faces": [{"box": bounding_box_payload(observation)} for observation in observations],
     }
 
 

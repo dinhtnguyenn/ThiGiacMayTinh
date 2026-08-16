@@ -1,6 +1,13 @@
 [
   {
     "date": "2026-08-16",
+    "macrostructure": "Index-First",
+    "theme": "Cobalt",
+    "enrichment": "none",
+    "brief": "Vietnamese shared-directory face registration, recognition, and protected profile administration"
+  },
+  {
+    "date": "2026-08-16",
     "macrostructure": "Narrative Workflow",
     "theme": "Coral",
     "enrichment": "none",

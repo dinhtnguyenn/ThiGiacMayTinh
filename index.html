@@ -3,17 +3,17 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="description" content="Đăng ký và nhận diện khuôn mặt bằng InsightFace trong hai bước đơn giản." />
-    <title>FaceOps — Đăng ký và nhận diện khuôn mặt</title>
+    <meta name="description" content="Đăng ký, nhận diện và quản trị danh bạ khuôn mặt dùng chung bằng InsightFace." />
+    <title>FaceOps - Danh bạ khuôn mặt</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="tokens.css" />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="site-nav">
-      <a class="brand" href="/" aria-label="FaceOps">
+      <a class="brand" href="/" aria-label="FaceOps, về trang chủ">
         <svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true">
           <path d="M5 10V5h5M18 5h5v5M23 18v5h-5M10 23H5v-5" />
           <circle cx="14" cy="14" r="3.2" />
@@ -21,154 +21,125 @@
         <span>FaceOps</span>
       </a>
       <div class="nav-actions">
-        <!-- Optional global actions can go here -->
+        <span class="server-status" id="serverStatus" data-state="checking">Đang kiểm tra server</span>
+        <button class="command-trigger" id="commandTrigger" type="button" aria-haspopup="dialog">Lệnh nhanh <kbd>Ctrl K</kbd></button>
       </div>
     </header>
 
     <main class="page-shell">
-      <section class="workflow-intro" aria-labelledby="pageTitle">
-        <h1 id="pageTitle">Hệ thống Nhận diện Khuôn mặt</h1>
-        <p>Chọn chức năng bên dưới để thao tác độc lập.</p>
-        
-        <div class="tabs-container">
-          <nav class="tabs" role="tablist" aria-label="Các chức năng chính">
-            <button class="tab-button is-active" id="tabRegister" type="button" role="tab" aria-selected="true" aria-controls="registerView">Đăng ký</button>
-            <button class="tab-button" id="tabRecognize" type="button" role="tab" aria-selected="false" aria-controls="recognitionView">Nhận diện</button>
-            <button class="tab-button" id="tabManage" type="button" role="tab" aria-selected="false" aria-controls="manageView">Quản lý Dữ liệu</button>
-          </nav>
-        </div>
+      <section class="directory-intro" aria-labelledby="pageTitle">
+        <p class="mono-label">DANH BA DUNG CHUNG</p>
+        <h1 id="pageTitle">Một server. Mọi thiết bị.</h1>
+        <p>Đăng ký khuôn mặt ở bất kỳ thiết bị nào, sau đó nhận diện từ cùng website. Ảnh chỉ được dùng để tạo embedding trên server.</p>
       </section>
 
-      <section class="face-workflow" aria-label="Vùng chức năng chính">
-        
-        <!-- ĐĂNG KÝ -->
-        <div class="flow-view is-active" id="registerView" role="tabpanel" aria-labelledby="tabRegister">
-          <div class="view-grid">
+      <nav class="module-index" role="tablist" aria-label="Chức năng FaceOps">
+        <button class="module-tab is-active" id="tabRegister" type="button" role="tab" aria-selected="true" aria-controls="registerView"><span>01</span> Đăng ký</button>
+        <button class="module-tab" id="tabRecognize" type="button" role="tab" aria-selected="false" aria-controls="recognitionView" tabindex="-1"><span>02</span> Nhận diện</button>
+        <button class="module-tab" id="tabManage" type="button" role="tab" aria-selected="false" aria-controls="manageView" tabindex="-1"><span>03</span> Quản lý dữ liệu</button>
+      </nav>
+
+      <section class="tool-surface" aria-label="Khu vực thao tác FaceOps">
+        <section class="module-view" id="registerView" role="tabpanel" aria-labelledby="tabRegister">
+          <div class="module-grid">
             <div class="camera-panel" id="cameraPanelRegister">
               <video id="liveVideoRegister" playsinline muted aria-label="Luồng camera đăng ký"></video>
-              <div class="camera-empty" id="cameraEmptyRegister">
-                <svg viewBox="0 0 220 180" aria-hidden="true">
-                  <path d="M49 61V39h22M149 39h22v22M171 119v22h-22M71 141H49v-22" />
-                  <ellipse cx="110" cy="88" rx="31" ry="40" />
-                  <path d="M82 145c8-17 21-26 28-26s20 9 28 26" />
-                </svg>
-                <p>Camera chưa mở</p>
-                <span>Bấm "Mở camera" để bắt đầu.</span>
+              <canvas class="face-tracking" id="registerTrackingCanvas" aria-hidden="true"></canvas>
+              <div class="camera-empty">
+                <svg viewBox="0 0 220 180" aria-hidden="true"><path d="M49 61V39h22M149 39h22v22M171 119v22h-22M71 141H49v-22" /><ellipse cx="110" cy="88" rx="31" ry="40" /><path d="M82 145c8-17 21-26 28-26s20 9 28 26" /></svg>
+                <p>Đang kiểm tra camera</p><span>Cho phép camera để theo dõi khuôn mặt.</span>
               </div>
               <div class="camera-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-              <p class="camera-status" id="cameraStatusRegister" aria-live="polite">Sẵn sàng.</p>
+              <p class="camera-status" id="cameraStatusRegister" aria-live="polite">Sẵn sàng đăng ký.</p>
             </div>
-
             <div class="action-panel">
-              <h2 class="h2-title">Đăng ký khuôn mặt mới</h2>
-              <p class="view-lede">Nhập tên, mở camera và lưu khuôn mặt của bạn vào hệ thống.</p>
-
+              <p class="panel-label">HỒ SƠ MỚI</p>
+              <h2>Đăng ký khuôn mặt</h2>
+              <p class="view-lede">Tên này sẽ xuất hiện khi hệ thống tìm được khuôn mặt tương ứng.</p>
               <form id="registrationForm" novalidate>
                 <label class="field-label" for="personName">Họ và tên</label>
-                <input class="text-input" id="personName" name="personName" type="text" autocomplete="name" placeholder="Ví dụ: Nguyen Van A" aria-required="true" required />
-                
-                <label class="consent-row" for="consentInput">
-                  <input id="consentInput" type="checkbox" required />
-                  <span>Tôi đồng ý lưu tên và embedding khuôn mặt trên server.</span>
-                </label>
-
-                <div class="button-stack">
-                  <button class="button button--secondary" id="startCameraRegister" type="button">Mở camera</button>
-                  <button class="button button--primary" id="registerButton" type="submit">Đăng ký</button>
+                <input class="text-input" id="personName" name="personName" type="text" autocomplete="name" placeholder="Ví dụ: Nguyen Van A" aria-describedby="nameHelp" aria-required="true" required />
+                <p class="field-help" id="nameHelp">Dùng tên thật hoặc mã định danh được phép hiển thị.</p>
+                <div class="upload-source">
+                  <input class="file-input" id="registerImageInput" type="file" accept="image/*" />
+                  <label class="upload-button" for="registerImageInput">Chọn ảnh từ máy</label>
+                  <p class="field-help" id="registerImageStatus">Tùy chọn. Khi có ảnh, hệ thống ưu tiên ảnh tải lên thay cho camera.</p>
                 </div>
+                <label class="consent-row" for="consentInput"><input id="consentInput" type="checkbox" /><span>Tôi đồng ý lưu tên và embedding khuôn mặt trong danh bạ dùng chung trên server.</span></label>
+                <div class="button-stack"><button class="button button--primary" id="registerButton" type="submit">Lưu hồ sơ</button></div>
                 <p class="form-message" id="registrationMessage" role="status" aria-live="polite"></p>
               </form>
+              <section class="processing-panel" aria-labelledby="registerTraceTitle">
+                <h3 id="registerTraceTitle">Xử lý thực tế</h3>
+                <ol class="processing-trace" id="registerProcessingTrace" aria-live="polite"><li data-state="idle">Chưa có yêu cầu được gửi.</li></ol>
+              </section>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- NHẬN DIỆN -->
-        <div class="flow-view" id="recognitionView" role="tabpanel" aria-labelledby="tabRecognize" hidden>
-          <div class="view-grid">
+        <section class="module-view" id="recognitionView" role="tabpanel" aria-labelledby="tabRecognize" hidden>
+          <div class="module-grid">
             <div class="camera-panel" id="cameraPanelRecognize">
               <video id="liveVideoRecognize" playsinline muted aria-label="Luồng camera nhận diện"></video>
-              <div class="camera-empty" id="cameraEmptyRecognize">
-                <svg viewBox="0 0 220 180" aria-hidden="true">
-                  <path d="M49 61V39h22M149 39h22v22M171 119v22h-22M71 141H49v-22" />
-                  <ellipse cx="110" cy="88" rx="31" ry="40" />
-                  <path d="M82 145c8-17 21-26 28-26s20 9 28 26" />
-                </svg>
-                <p>Camera chưa mở</p>
-                <span>Bấm "Mở camera" để bắt đầu.</span>
+              <canvas class="face-tracking" id="recognizeTrackingCanvas" aria-hidden="true"></canvas>
+              <div class="camera-empty">
+                <svg viewBox="0 0 220 180" aria-hidden="true"><path d="M49 61V39h22M149 39h22v22M171 119v22h-22M71 141H49v-22" /><ellipse cx="110" cy="88" rx="31" ry="40" /><path d="M82 145c8-17 21-26 28-26s20 9 28 26" /></svg>
+                <p>Camera chưa mở</p><span>Camera sẽ tự mở khi bạn nhận diện.</span>
               </div>
               <div class="camera-frame" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
-              <p class="camera-status" id="cameraStatusRecognize" aria-live="polite">Sẵn sàng.</p>
+              <p class="camera-status" id="cameraStatusRecognize" aria-live="polite">Sẵn sàng nhận diện.</p>
             </div>
-
             <div class="action-panel">
-              <h2 class="h2-title">Nhận diện</h2>
-              <p class="view-lede">Đặt khuôn mặt vào khung hình và bấm nhận diện để so khớp.</p>
-
-              <div class="recognition-result" id="recognitionResult" data-state="idle" aria-live="polite">
-                <p class="result-label">KẾT QUẢ</p>
-                <strong>Chưa có thông tin</strong>
-                <span>Hệ thống sẽ đối chiếu với cơ sở dữ liệu.</span>
+              <p class="panel-label">TRA CỨU DANH BẠ</p>
+              <h2>Nhận diện khuôn mặt</h2>
+              <p class="view-lede">Hệ thống chỉ hiển thị tên sau khi khuôn mặt đạt ngưỡng khớp đã cấu hình.</p>
+              <div class="recognition-result" id="recognitionResult" data-state="idle" aria-live="polite"><p class="result-label">KẾT QUẢ</p><strong>Chưa nhận diện</strong><span>Đặt khuôn mặt vào khung hình rồi bắt đầu.</span><ol class="recognition-faces" id="recognitionFaces"></ol></div>
+              <div class="upload-source">
+                <input class="file-input" id="recognizeImageInput" type="file" accept="image/*" />
+                <label class="upload-button" for="recognizeImageInput">Chọn ảnh từ máy</label>
+                <p class="field-help" id="recognizeImageStatus">Tùy chọn. Khi có ảnh, hệ thống ưu tiên ảnh tải lên thay cho camera.</p>
               </div>
-
-              <div class="button-stack">
-                <button class="button button--secondary" id="startCameraRecognize" type="button">Mở camera</button>
-                <button class="button button--primary" id="recognizeButton" type="button">Nhận diện</button>
-              </div>
+              <div class="button-stack"><button class="button button--primary" id="recognizeButton" type="button">Nhận diện</button></div>
+              <section class="processing-panel" aria-labelledby="recognizeTraceTitle">
+                <h3 id="recognizeTraceTitle">Xử lý thực tế</h3>
+                <ol class="processing-trace" id="recognizeProcessingTrace" aria-live="polite"><li data-state="idle">Chưa có yêu cầu được gửi.</li></ol>
+              </section>
             </div>
           </div>
-        </div>
+        </section>
 
-        <!-- QUẢN LÝ DỮ LIỆU -->
-        <div class="flow-view" id="manageView" role="tabpanel" aria-labelledby="tabManage" hidden>
-          <div class="manage-panel">
-            <div class="manage-header">
-              <h2 class="h2-title">Dữ liệu đã đăng ký</h2>
-              <button class="button button--secondary" id="refreshDataButton" type="button">Làm mới</button>
+        <section class="module-view management-view" id="manageView" role="tabpanel" aria-labelledby="tabManage" hidden>
+          <div class="management-gate" id="managementGate">
+            <p class="panel-label">KHU VỰC HẠN CHẾ</p><h2>Quản lý danh bạ</h2>
+            <p>Nhập mã quản trị từ cấu hình server để xem, đổi tên hoặc xóa hồ sơ. Mã này chỉ giữ trong bộ nhớ của tab hiện tại.</p>
+            <form class="admin-form" id="adminForm" novalidate>
+              <label class="field-label" for="adminTokenInput">Mã quản trị</label>
+              <div class="admin-entry"><input class="text-input" id="adminTokenInput" type="password" autocomplete="off" spellcheck="false" required /><button class="button button--primary" id="unlockManagementButton" type="submit">Mở quản lý</button></div>
+              <p class="form-message" id="managementMessage" role="status" aria-live="polite"></p>
+            </form>
+          </div>
+          <div class="management-panel" id="managementPanel" hidden>
+            <div class="management-heading">
+              <div><p class="panel-label">DANH SÁCH SERVER</p><h2>Dữ liệu đã đăng ký</h2><p id="managementSummary">Chưa tải dữ liệu.</p></div>
+              <div class="management-actions"><button class="button button--secondary" id="refreshDataButton" type="button">Làm mới</button><button class="button button--quiet" id="lockManagementButton" type="button">Khóa quản lý</button></div>
             </div>
-            
-            <div class="table-container">
-              <table class="data-table" id="profilesTable">
-                <thead>
-                  <tr>
-                    <th>Tên</th>
-                    <th>Ngày đăng ký</th>
-                    <th>Phương thức</th>
-                    <th class="col-actions">Thao tác</th>
-                  </tr>
-                </thead>
-                <tbody id="profilesTableBody">
-                  <tr><td colspan="4" class="text-center">Đang tải dữ liệu...</td></tr>
-                </tbody>
-              </table>
+            <div class="table-container" tabindex="0">
+              <table class="data-table" id="profilesTable"><thead><tr><th scope="col">Tên</th><th scope="col">Đăng ký</th><th scope="col">Nguồn</th><th scope="col"><span class="sr-only">Thao tác</span></th></tr></thead><tbody id="profilesTableBody"><tr><td colspan="4" class="table-placeholder">Chưa có dữ liệu.</td></tr></tbody></table>
             </div>
           </div>
-        </div>
-
+        </section>
       </section>
     </main>
 
-    <!-- Dialog Cập nhật tên -->
+    <footer class="site-footer"><p>FaceOps / InsightFace</p><p>Dữ liệu khuôn mặt được xử lý và lưu trong database của server.</p></footer>
+
     <dialog class="edit-dialog" id="editDialog" aria-labelledby="editDialogTitle">
-      <form method="dialog" id="editForm">
-        <h3 id="editDialogTitle">Cập nhật tên hồ sơ</h3>
-        <input type="hidden" id="editProfileId" />
-        <div class="field-group">
-          <label class="field-label" for="editProfileName">Họ và tên mới</label>
-          <input class="text-input" id="editProfileName" type="text" required />
-        </div>
-        <div class="dialog-actions">
-          <button class="button button--secondary" type="button" id="cancelEditButton">Hủy</button>
-          <button class="button button--primary" type="submit">Lưu thay đổi</button>
-        </div>
-      </form>
+      <form id="editForm" novalidate><p class="panel-label">CHỈNH SỬA HỒ SƠ</p><h2 id="editDialogTitle">Cập nhật tên</h2><input type="hidden" id="editProfileId" /><label class="field-label" for="editProfileName">Họ và tên</label><input class="text-input" id="editProfileName" type="text" autocomplete="name" required /><p class="form-message" id="editMessage" role="status" aria-live="polite"></p><div class="dialog-actions"><button class="button button--secondary" id="cancelEditButton" type="button">Hủy</button><button class="button button--primary" id="saveEditButton" type="submit">Lưu thay đổi</button></div></form>
     </dialog>
 
-    <footer class="site-footer">
-      <div>
-        <p class="footer-statement">FaceOps Lab</p>
-        <p class="footer-note">Hệ thống Nhận diện và Quản lý Khuôn mặt chia sẻ.</p>
-      </div>
-    </footer>
+    <dialog class="command-dialog" id="commandDialog" aria-labelledby="commandTitle">
+      <div class="command-panel"><div class="command-heading"><h2 id="commandTitle">Đi tới</h2><button class="icon-button" id="closeCommandButton" type="button" aria-label="Đóng lệnh nhanh">x</button></div><label class="sr-only" for="commandInput">Tìm thao tác</label><input class="text-input" id="commandInput" type="search" placeholder="Tìm thao tác" autocomplete="off" /><div class="command-list" id="commandList" role="listbox" aria-label="Danh sách thao tác"><button class="command-option" type="button" data-command="register" role="option">Đăng ký khuôn mặt <kbd>1</kbd></button><button class="command-option" type="button" data-command="recognize" role="option">Nhận diện khuôn mặt <kbd>2</kbd></button><button class="command-option" type="button" data-command="manage" role="option">Quản lý dữ liệu <kbd>3</kbd></button></div></div>
+    </dialog>
 
     <script src="app.js"></script>
   </body>
