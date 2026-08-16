@@ -31,7 +31,6 @@
     registerProcessingTrace: document.getElementById("registerProcessingTrace"),
     recognizeImageInput: document.getElementById("recognizeImageInput"),
     recognizeImageStatus: document.getElementById("recognizeImageStatus"),
-    recognizeButton: document.getElementById("recognizeButton"),
     recognitionResult: document.getElementById("recognitionResult"),
     recognitionFaces: document.getElementById("recognitionFaces"),
     recognizeProcessingTrace: document.getElementById("recognizeProcessingTrace"),
@@ -63,6 +62,10 @@
     cameraContext: null,
     trackingTimer: null,
     trackingRequestActive: false,
+    browserDetector: null,
+    browserTrackingFrame: null,
+    browserTrackingBusy: false,
+    latestRecognition: null,
   };
 
   function errorMessage(error) {
@@ -193,6 +196,72 @@
     });
   }
 
+  function browserFaceDetector() {
+    if (!("FaceDetector" in window)) return null;
+    if (!state.browserDetector) {
+      try {
+        state.browserDetector = new window.FaceDetector({ fastMode: true, maxDetectedFaces: 5 });
+      } catch {
+        return null;
+      }
+    }
+    return state.browserDetector;
+  }
+
+  function labelsForBrowserFaces(faces) {
+    const latest = state.latestRecognition;
+    if (!latest || !Array.isArray(latest.faces) || !latest.faces.length) return [];
+    return faces.map((face) => {
+      const centerX = (face.box[0] + face.box[2]) / 2;
+      const centerY = (face.box[1] + face.box[3]) / 2;
+      let nearest = null;
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      latest.faces.forEach((candidate) => {
+        if (!Array.isArray(candidate.box) || candidate.box.length !== 4) return;
+        const candidateX = (candidate.box[0] + candidate.box[2]) / 2;
+        const candidateY = (candidate.box[1] + candidate.box[3]) / 2;
+        const distance = Math.hypot(centerX - candidateX, centerY - candidateY);
+        if (distance < nearestDistance) {
+          nearest = candidate;
+          nearestDistance = distance;
+        }
+      });
+      return nearestDistance < Math.max(face.box[2] - face.box[0], face.box[3] - face.box[1]) * 1.5 ? nearest : null;
+    });
+  }
+
+  async function detectFacesInBrowser(context) {
+    const detector = browserFaceDetector();
+    const video = videoFor(context);
+    if (!detector || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    state.browserTrackingBusy = true;
+    try {
+      const detected = await detector.detect(video);
+      const faces = detected.map((face) => {
+        const box = face.boundingBox;
+        return { box: [box.x, box.y, box.x + box.width, box.y + box.height] };
+      });
+      if (state.cameraContext !== context || !state.stream) return;
+      drawTracking(context, faces, video.videoWidth, video.videoHeight, context === "recognize" ? labelsForBrowserFaces(faces) : []);
+    } catch {
+      // The server-provided box remains available as a compatibility fallback.
+    } finally {
+      state.browserTrackingBusy = false;
+    }
+  }
+
+  function runBrowserTracking(context) {
+    if (state.cameraContext !== context || !state.stream) return;
+    if (!state.browserTrackingBusy) detectFacesInBrowser(context);
+    state.browserTrackingFrame = window.requestAnimationFrame(() => runBrowserTracking(context));
+  }
+
+  function startBrowserTracking(context) {
+    if (!browserFaceDetector()) return;
+    if (state.browserTrackingFrame) window.cancelAnimationFrame(state.browserTrackingFrame);
+    state.browserTrackingFrame = window.requestAnimationFrame(() => runBrowserTracking(context));
+  }
+
   async function captureFrame(context, filename) {
     const video = videoFor(context);
     if (!state.stream || state.cameraContext !== context || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
@@ -219,18 +288,33 @@
     state.trackingRequestActive = true;
     try {
       const image = await captureFrame(context, "tracking.jpg");
-      const form = new FormData();
-      form.append("image", image, image.name);
-      const payload = await apiFetch("/api/tracking", { method: "POST", body: form });
-      const faces = Array.isArray(payload.faces) ? payload.faces : [];
-      drawTracking(context, faces, payload.image_width, payload.image_height);
-      setCameraStatus(context, faces.length ? "Đang theo dõi " + faces.length + " khuôn mặt." : "Chưa thấy khuôn mặt.");
-    } catch {
+      if (context === "recognize") {
+        const payload = await requestRecognition(image);
+        applyRecognition(payload, true);
+        const faceCount = Array.isArray(payload.faces) ? payload.faces.length : 0;
+        setCameraStatus(context, faceCount ? "Đang nhận diện " + faceCount + " khuôn mặt." : "Chưa thấy khuôn mặt.");
+      } else {
+        const form = new FormData();
+        form.append("image", image, image.name);
+        const payload = await apiFetch("/api/tracking", { method: "POST", body: form });
+        const faces = Array.isArray(payload.faces) ? payload.faces : [];
+        drawTracking(context, faces, payload.image_width, payload.image_height);
+        setCameraStatus(context, faces.length ? "Đang theo dõi " + faces.length + " khuôn mặt." : "Chưa thấy khuôn mặt.");
+      }
+    } catch (error) {
       clearTracking(context);
+      if (context === "recognize") {
+        if (error instanceof ApiError && error.code === "face_not_found") {
+          setRecognition("idle", "Chưa có khuôn mặt", "Đặt một hoặc nhiều khuôn mặt vào khung hình.");
+          renderRecognitionFaces([]);
+        } else {
+          setRecognition("error", "Không thể nhận diện", errorMessage(error));
+        }
+      }
     } finally {
       state.trackingRequestActive = false;
       if (state.cameraContext === context && state.stream) {
-        state.trackingTimer = window.setTimeout(() => trackCamera(context), 900);
+        state.trackingTimer = window.setTimeout(() => trackCamera(context), context === "recognize" ? 1200 : 900);
       }
     }
   }
@@ -238,15 +322,20 @@
   function startTracking(context) {
     if (state.trackingTimer) window.clearTimeout(state.trackingTimer);
     state.trackingTimer = window.setTimeout(() => trackCamera(context), 120);
+    startBrowserTracking(context);
   }
 
   function stopCamera() {
     if (state.trackingTimer) window.clearTimeout(state.trackingTimer);
+    if (state.browserTrackingFrame) window.cancelAnimationFrame(state.browserTrackingFrame);
     state.trackingTimer = null;
+    state.browserTrackingFrame = null;
     if (state.stream) state.stream.getTracks().forEach((track) => track.stop());
     state.stream = null;
     state.cameraContext = null;
     state.trackingRequestActive = false;
+    state.browserTrackingBusy = false;
+    state.latestRecognition = null;
     ["register", "recognize"].forEach((context) => {
       panelFor(context).classList.remove("is-live");
       clearTracking(context);
@@ -342,29 +431,37 @@
     }
   }
 
-  async function recognizeFace() {
-    setButtonState(elements.recognizeButton, "loading", "Đang nhận diện...");
+  async function requestRecognition(image) {
+    const form = new FormData();
+    form.append("mode", "image");
+    form.append("image", image, image.name);
+    return apiFetch("/api/recognitions", { method: "POST", body: form });
+  }
+
+  function applyRecognition(payload, drawCamera) {
+    const faces = Array.isArray(payload.faces) ? payload.faces : [];
+    const matchedCount = faces.filter((face) => face.matched && face.profile).length;
+    state.latestRecognition = { faces };
+    renderProcessing("recognize", payload.processing);
+    renderRecognitionFaces(faces);
+    if (drawCamera && state.cameraContext === "recognize") {
+      drawTracking("recognize", faces, payload.image_width, payload.image_height, faces);
+    }
+    if (matchedCount) {
+      setRecognition("match", "Đã tìm thấy dữ liệu", "Khớp " + matchedCount + " khuôn mặt.");
+    } else {
+      setRecognition("empty", "Chưa có dữ liệu", "Không tìm thấy khuôn mặt đã đăng ký.");
+    }
+  }
+
+  async function recognizeUploadedImage() {
+    const selected = elements.recognizeImageInput.files && elements.recognizeImageInput.files[0];
+    if (!selected) return;
     try {
-      const submission = await prepareImage("recognize", "recognition.jpg");
-      const form = new FormData();
-      form.append("mode", "image");
-      form.append("image", submission.image, submission.image.name);
-      const payload = await apiFetch("/api/recognitions", { method: "POST", body: form });
-      const faces = Array.isArray(payload.faces) ? payload.faces : [];
-      const matchedCount = faces.filter((face) => face.matched && face.profile).length;
-      renderProcessing("recognize", payload.processing);
-      renderRecognitionFaces(faces);
-      if (state.cameraContext === "recognize") drawTracking("recognize", faces, payload.image_width, payload.image_height, faces);
-      if (matchedCount) {
-        setRecognition("match", "Đã tìm thấy dữ liệu", "Khớp " + matchedCount + " khuôn mặt.");
-      } else {
-        setRecognition("empty", "Chưa có dữ liệu", "Không tìm thấy khuôn mặt đã đăng ký.");
-      }
-      setButtonState(elements.recognizeButton, "success", "Đã nhận diện");
+      applyRecognition(await requestRecognition(selected), false);
     } catch (error) {
       setRecognition("error", "Không thể nhận diện", errorMessage(error));
       renderRecognitionFaces([]);
-      setButtonState(elements.recognizeButton, "error", "Thử lại");
     }
   }
 
@@ -539,8 +636,10 @@
   });
   elements.registrationForm.addEventListener("submit", registerFace);
   elements.registerImageInput.addEventListener("change", () => updateSelectedImage("register"));
-  elements.recognizeImageInput.addEventListener("change", () => updateSelectedImage("recognize"));
-  elements.recognizeButton.addEventListener("click", recognizeFace);
+  elements.recognizeImageInput.addEventListener("change", () => {
+    updateSelectedImage("recognize");
+    recognizeUploadedImage();
+  });
   elements.adminForm.addEventListener("submit", unlockManagement);
   elements.refreshDataButton.addEventListener("click", loadProfiles);
   elements.lockManagementButton.addEventListener("click", () => lockManagement());

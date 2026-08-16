@@ -15,10 +15,10 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 The website has three modules:
 
 1. **Đăng ký** — the page asks for camera permission when it opens. Enter a name and select **Đăng ký khuôn mặt**; the app opens the camera automatically if no image was selected. A success message remains on this tab. Registration accepts exactly one face to avoid assigning a name to the wrong person.
-2. **Nhận diện** — the camera opens automatically when this tab is selected. Use a fresh webcam frame or one uploaded image, then select **Nhận diện**. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result.
+2. **Nhận diện** — the camera opens automatically when this tab is selected and sends frames for recognition continuously. Selecting one uploaded image runs one recognition immediately. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, rename a profile, or delete one. The token is kept only in the tab's memory and is never written to browser storage.
 
-The simple UI sends either a fresh webcam frame or one selected image in static-image mode. It does not expose the former liveness or notebook controls. While a camera is live, the browser periodically submits an in-memory frame to InsightFace and draws the returned face boxes as tracking overlays. These tracking frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
+The simple UI sends either a fresh webcam frame or one selected image in static-image mode. It does not expose the former liveness or notebook controls. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browsers without this API fall back to the server-provided boxes. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
 
 ## Shared server storage
 
