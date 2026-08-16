@@ -52,6 +52,12 @@
     editMessage: document.getElementById("editMessage"),
     cancelEditButton: document.getElementById("cancelEditButton"),
     saveEditButton: document.getElementById("saveEditButton"),
+    detailsDialog: document.getElementById("detailsDialog"),
+    closeDetailsButton: document.getElementById("closeDetailsButton"),
+    detailsProfileSummary: document.getElementById("detailsProfileSummary"),
+    detailsProfileFields: document.getElementById("detailsProfileFields"),
+    detailsImageStorage: document.getElementById("detailsImageStorage"),
+    detailsSamples: document.getElementById("detailsSamples"),
   };
 
   const state = {
@@ -66,10 +72,18 @@
     browserTrackingFrame: null,
     browserTrackingBusy: false,
     latestRecognition: null,
+    recognitionTracks: [],
+    enrollmentTokens: new Map(),
   };
+
+  const REQUIRED_RECOGNITION_CONFIRMATIONS = 2;
 
   function errorMessage(error) {
     return error instanceof Error ? error.message : "Không thể hoàn tất thao tác.";
+  }
+
+  function enrollmentKey(name) {
+    return name.trim().replace(/\s+/g, " ").toLocaleLowerCase("vi-VN");
   }
 
   async function apiFetch(path, { admin = false, body, headers, ...options } = {}) {
@@ -230,6 +244,51 @@
     });
   }
 
+  function faceCenter(face, imageWidth, imageHeight) {
+    const box = Array.isArray(face.box) ? face.box : [];
+    if (box.length !== 4 || !imageWidth || !imageHeight) return null;
+    return {
+      x: (Number(box[0]) + Number(box[2])) / (2 * imageWidth),
+      y: (Number(box[1]) + Number(box[3])) / (2 * imageHeight),
+    };
+  }
+
+  function stabilizeRecognitionFaces(faces, imageWidth, imageHeight) {
+    const previousTracks = [...state.recognitionTracks];
+    const nextTracks = [];
+    const stabilized = faces.map((face) => {
+      const center = faceCenter(face, imageWidth, imageHeight);
+      const profileId = face.matched && face.profile ? face.profile.id : null;
+      let previous = null;
+      let closestDistance = Number.POSITIVE_INFINITY;
+      previousTracks.forEach((track) => {
+        if (!center || !track.center) return;
+        const distance = Math.hypot(center.x - track.center.x, center.y - track.center.y);
+        if (distance < closestDistance) {
+          previous = track;
+          closestDistance = distance;
+        }
+      });
+      const sameIdentity = Boolean(
+        profileId && previous && closestDistance < 0.2 && previous.profileId === profileId,
+      );
+      const confirmationCount = profileId
+        ? Math.min(REQUIRED_RECOGNITION_CONFIRMATIONS, sameIdentity ? previous.confirmationCount + 1 : 1)
+        : 0;
+      const confirmed = Boolean(profileId) && confirmationCount >= REQUIRED_RECOGNITION_CONFIRMATIONS;
+      nextTracks.push({ center, profileId, confirmationCount });
+      return {
+        ...face,
+        serverMatched: Boolean(profileId),
+        matched: confirmed,
+        pending: Boolean(profileId) && !confirmed,
+        confirmationCount,
+      };
+    });
+    state.recognitionTracks = nextTracks;
+    return stabilized;
+  }
+
   async function detectFacesInBrowser(context) {
     const detector = browserFaceDetector();
     const video = videoFor(context);
@@ -305,6 +364,8 @@
       clearTracking(context);
       if (context === "recognize") {
         if (error instanceof ApiError && error.code === "face_not_found") {
+          state.latestRecognition = null;
+          state.recognitionTracks = [];
           setRecognition("idle", "Chưa có khuôn mặt", "Đặt một hoặc nhiều khuôn mặt vào khung hình.");
           renderRecognitionFaces([]);
         } else {
@@ -314,7 +375,7 @@
     } finally {
       state.trackingRequestActive = false;
       if (state.cameraContext === context && state.stream) {
-        state.trackingTimer = window.setTimeout(() => trackCamera(context), context === "recognize" ? 1200 : 900);
+        state.trackingTimer = window.setTimeout(() => trackCamera(context), context === "recognize" ? 700 : 900);
       }
     }
   }
@@ -336,6 +397,7 @@
     state.trackingRequestActive = false;
     state.browserTrackingBusy = false;
     state.latestRecognition = null;
+    state.recognitionTracks = [];
     ["register", "recognize"].forEach((context) => {
       panelFor(context).classList.remove("is-live");
       clearTracking(context);
@@ -375,7 +437,9 @@
   function updateSelectedImage(context) {
     const selected = inputFor(context).files && inputFor(context).files[0];
     const status = context === "register" ? elements.registerImageStatus : elements.recognizeImageStatus;
-    status.textContent = selected ? "Đã chọn: " + selected.name : "Hoặc dùng camera đang mở.";
+    status.textContent = selected
+      ? "Đã chọn: " + selected.name
+      : context === "recognize" ? "Camera đang nhận diện liên tục." : "Hoặc dùng camera đang mở. Đăng ký lại cùng tên trong phiên này để thêm mẫu.";
   }
 
   function renderProcessing(context, processing) {
@@ -393,8 +457,13 @@
     elements.recognitionFaces.replaceChildren();
     faces.forEach((face, index) => {
       const item = document.createElement("li");
-      item.dataset.state = face.matched ? "match" : "empty";
-      item.textContent = "Người " + (index + 1) + ": " + (face.matched && face.profile ? face.profile.name : "Chưa có dữ liệu");
+      item.dataset.state = face.matched ? "match" : face.pending ? "pending" : "empty";
+      const label = face.matched && face.profile
+        ? face.profile.name
+        : face.pending && face.profile
+          ? "Đang xác nhận: " + face.profile.name + " (" + face.confirmationCount + "/" + REQUIRED_RECOGNITION_CONFIRMATIONS + ")"
+          : "Chưa có dữ liệu";
+      item.textContent = "Người " + (index + 1) + ": " + label;
       elements.recognitionFaces.append(item);
     });
   }
@@ -420,10 +489,23 @@
       form.append("consent", "true");
       form.append("mode", "image");
       form.append("image", submission.image, submission.image.name);
+      const continuationToken = state.enrollmentTokens.get(enrollmentKey(name));
+      if (continuationToken) form.append("enrollment_token", continuationToken);
       const payload = await apiFetch("/api/profiles", { method: "POST", body: form });
       renderProcessing("register", payload.processing);
       elements.personName.value = "";
-      setMessage(elements.registrationMessage, "Đăng ký thành công: " + payload.profile.name + ".", "success");
+      const enrollment = payload.enrollment || {};
+      if (enrollment.enrollment_token) {
+        state.enrollmentTokens.set(enrollmentKey(name), enrollment.enrollment_token);
+      }
+      const sampleCount = Number(enrollment.sample_count) || 1;
+      const maxSamples = Number(enrollment.max_samples) || sampleCount;
+      setMessage(
+        elements.registrationMessage,
+        (enrollment.created_profile ? "Đăng ký thành công: " : "Đã thêm mẫu khuôn mặt cho ")
+          + payload.profile.name + ". Mẫu " + sampleCount + "/" + maxSamples + ".",
+        "success",
+      );
       setButtonState(elements.registerButton, "success", "Đã đăng ký");
     } catch (error) {
       setMessage(elements.registrationMessage, errorMessage(error), "error");
@@ -439,8 +521,12 @@
   }
 
   function applyRecognition(payload, drawCamera) {
-    const faces = Array.isArray(payload.faces) ? payload.faces : [];
+    const rawFaces = Array.isArray(payload.faces) ? payload.faces : [];
+    const faces = drawCamera
+      ? stabilizeRecognitionFaces(rawFaces, payload.image_width, payload.image_height)
+      : rawFaces;
     const matchedCount = faces.filter((face) => face.matched && face.profile).length;
+    const pendingCount = faces.filter((face) => face.pending && face.profile).length;
     state.latestRecognition = { faces };
     renderProcessing("recognize", payload.processing);
     renderRecognitionFaces(faces);
@@ -449,6 +535,8 @@
     }
     if (matchedCount) {
       setRecognition("match", "Đã tìm thấy dữ liệu", "Khớp " + matchedCount + " khuôn mặt.");
+    } else if (pendingCount) {
+      setRecognition("idle", "Đang xác nhận", "Đã thấy " + pendingCount + " khuôn mặt; kiểm tra thêm một khung hình.");
     } else {
       setRecognition("empty", "Chưa có dữ liệu", "Không tìm thấy khuôn mặt đã đăng ký.");
     }
@@ -481,7 +569,7 @@
     elements.profilesTableBody.replaceChildren();
     const row = document.createElement("tr");
     const cell = document.createElement("td");
-    cell.colSpan = 3;
+    cell.colSpan = 4;
     cell.textContent = message;
     row.append(cell);
     elements.profilesTableBody.append(row);
@@ -497,19 +585,21 @@
       const row = document.createElement("tr");
       const name = document.createElement("td");
       name.textContent = profile.name;
+      const samples = document.createElement("td");
+      samples.textContent = String(profile.sample_count || 0);
       const date = document.createElement("td");
       date.textContent = displayDate(profile.created_at);
       const actions = document.createElement("td");
-      ["Sửa", "Xóa"].forEach((label) => {
+      ["Chi tiết", "Sửa", "Xóa"].forEach((label) => {
         const button = document.createElement("button");
         button.className = "table-button";
         button.type = "button";
-        button.dataset.action = label === "Sửa" ? "edit" : "delete";
+        button.dataset.action = label === "Chi tiết" ? "details" : label === "Sửa" ? "edit" : "delete";
         button.dataset.profileId = profile.id;
         button.textContent = label;
         actions.append(button);
       });
-      row.append(name, date, actions);
+      row.append(name, samples, date, actions);
       elements.profilesTableBody.append(row);
     });
   }
@@ -555,7 +645,76 @@
     state.profiles = [];
     elements.managementPanel.hidden = true;
     elements.managementGate.hidden = false;
+    closeDetailsDialog();
     setMessage(elements.managementMessage, message);
+  }
+
+  function addDetailField(label, value) {
+    const term = document.createElement("dt");
+    term.textContent = label;
+    const definition = document.createElement("dd");
+    definition.textContent = value;
+    elements.detailsProfileFields.append(term, definition);
+  }
+
+  function clearDetails() {
+    elements.detailsProfileSummary.textContent = "";
+    elements.detailsProfileFields.replaceChildren();
+    elements.detailsImageStorage.textContent = "";
+    elements.detailsSamples.replaceChildren();
+  }
+
+  function closeDetailsDialog() {
+    if (elements.detailsDialog.open) elements.detailsDialog.close();
+    clearDetails();
+  }
+
+  function renderProfileDetails(payload) {
+    clearDetails();
+    const profile = payload.profile || {};
+    const samples = Array.isArray(payload.samples) ? payload.samples : [];
+    elements.detailsProfileSummary.textContent = profile.name + " · " + samples.length + " mẫu embedding";
+    addDetailField("Mã hồ sơ", profile.id || "Không xác định");
+    addDetailField("Đăng ký", displayDate(profile.created_at));
+    addDetailField("Nguồn", profile.source_mode || "Không xác định");
+    addDetailField("Kiểu lưu", "Embedding float32 trên server");
+    const imageStorage = payload.raw_image_storage || {};
+    elements.detailsImageStorage.textContent = imageStorage.message || "Không có thông tin lưu ảnh.";
+    samples.forEach((sample, index) => {
+      const section = document.createElement("article");
+      section.className = "detail-sample";
+      const heading = document.createElement("h3");
+      heading.textContent = "Mẫu " + (index + 1);
+      const metadata = document.createElement("p");
+      const quality = typeof sample.quality_score === "number" ? sample.quality_score.toFixed(3) : "Chưa có (mẫu cũ)";
+      metadata.textContent = "Mã mẫu: " + sample.id + " · " + displayDate(sample.created_at) + " · chất lượng: " + quality + " · " + sample.embedding_dimension + " chiều";
+      const vectorLabel = document.createElement("label");
+      const vectorId = "embeddingVector" + index;
+      vectorLabel.htmlFor = vectorId;
+      vectorLabel.textContent = "Vector embedding đầy đủ (float32)";
+      const vector = document.createElement("textarea");
+      vector.id = vectorId;
+      vector.className = "embedding-vector";
+      vector.readOnly = true;
+      vector.rows = 8;
+      vector.spellcheck = false;
+      vector.value = JSON.stringify(Array.isArray(sample.embedding_vector) ? sample.embedding_vector : []);
+      section.append(heading, metadata, vectorLabel, vector);
+      elements.detailsSamples.append(section);
+    });
+  }
+
+  async function openDetailsDialog(profileId) {
+    if (!state.adminToken) return;
+    try {
+      const payload = await apiFetch("/api/profiles/" + encodeURIComponent(profileId) + "/details", { admin: true, cache: "no-store" });
+      renderProfileDetails(payload);
+      elements.detailsDialog.showModal();
+      elements.closeDetailsButton.focus();
+    } catch (error) {
+      elements.managementSummary.textContent = errorMessage(error);
+      if (error.status === 401 || error.status === 503) lockManagement(errorMessage(error));
+    }
   }
 
   function openEditDialog(profileId) {
@@ -614,6 +773,7 @@
     });
     if (tabName === "manage") showManagement();
     if (tabName === "recognize") {
+      state.recognitionTracks = [];
       setRecognition("idle", "Chưa có kết quả", "Đặt một hoặc nhiều khuôn mặt vào khung hình.");
       renderRecognitionFaces([]);
     }
@@ -646,11 +806,14 @@
   elements.profilesTable.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");
     if (!button) return;
+    if (button.dataset.action === "details") openDetailsDialog(button.dataset.profileId);
     if (button.dataset.action === "edit") openEditDialog(button.dataset.profileId);
     if (button.dataset.action === "delete") deleteProfile(button.dataset.profileId);
   });
   elements.editForm.addEventListener("submit", updateProfile);
   elements.cancelEditButton.addEventListener("click", () => elements.editDialog.close());
+  elements.closeDetailsButton.addEventListener("click", closeDetailsDialog);
+  elements.detailsDialog.addEventListener("cancel", () => window.setTimeout(clearDetails, 0));
   window.addEventListener("beforeunload", stopCamera);
 
   switchTab("register", false);

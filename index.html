@@ -34,7 +34,7 @@
             <input id="personName" type="text" autocomplete="name" placeholder="Nguyen Van A" minlength="2" required />
             <input class="file-input" id="registerImageInput" type="file" accept="image/*" />
             <label class="upload-button" for="registerImageInput">Chọn ảnh từ máy</label>
-            <p class="file-status" id="registerImageStatus">Hoặc dùng camera đang mở.</p>
+            <p class="file-status" id="registerImageStatus">Hoặc dùng camera đang mở. Đăng ký lại cùng tên trong phiên này để thêm mẫu.</p>
             <button class="button" id="registerButton" type="submit">Đăng ký khuôn mặt</button>
             <p class="message" id="registrationMessage" role="status" aria-live="polite"></p>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="registerProcessingTrace" aria-live="polite"></ol></details>
@@ -71,7 +71,7 @@
           <section class="management-panel" id="managementPanel" hidden>
             <div class="manage-head"><h2>Dữ liệu đã đăng ký</h2><div><button class="text-button" id="refreshDataButton" type="button">Làm mới</button><button class="text-button" id="lockManagementButton" type="button">Khóa</button></div></div>
             <p class="file-status" id="managementSummary">Chưa tải dữ liệu.</p>
-            <div class="table-wrap"><table id="profilesTable"><thead><tr><th>Tên</th><th>Đăng ký</th><th></th></tr></thead><tbody id="profilesTableBody"><tr><td colspan="3">Chưa có dữ liệu.</td></tr></tbody></table></div>
+            <div class="table-wrap"><table id="profilesTable"><thead><tr><th>Tên</th><th>Mẫu</th><th>Đăng ký</th><th></th></tr></thead><tbody id="profilesTableBody"><tr><td colspan="4">Chưa có dữ liệu.</td></tr></tbody></table></div>
           </section>
         </section>
       </section>
@@ -86,6 +86,16 @@
         <p class="message" id="editMessage" role="status" aria-live="polite"></p>
         <div class="dialog-actions"><button class="text-button" id="cancelEditButton" type="button">Hủy</button><button class="button" id="saveEditButton" type="submit">Lưu</button></div>
       </form>
+    </dialog>
+
+    <dialog id="detailsDialog" aria-labelledby="detailsDialogTitle">
+      <section class="detail-dialog">
+        <div class="manage-head"><h2 id="detailsDialogTitle">Chi tiết dữ liệu</h2><button class="text-button" id="closeDetailsButton" type="button">Đóng</button></div>
+        <p class="file-status" id="detailsProfileSummary"></p>
+        <dl class="detail-list" id="detailsProfileFields"></dl>
+        <p class="detail-notice" id="detailsImageStorage" role="status"></p>
+        <section class="detail-samples" id="detailsSamples" aria-live="polite"></section>
+      </section>
     </dialog>
 
     <script src="app.js"></script>

@@ -22,6 +22,12 @@ class Settings:
     challenge_ttl_seconds: int
     pose_delta_threshold: float
     max_upload_bytes: int
+    max_samples_per_profile: int
+    min_face_size: int
+    min_detection_score: float
+    min_face_sharpness: float
+    min_face_brightness: float
+    max_face_brightness: float
     signing_secret: str
     admin_token: str
 
@@ -42,6 +48,12 @@ class Settings:
             challenge_ttl_seconds=int(os.getenv("FACEOPS_CHALLENGE_TTL_SECONDS", "90")),
             pose_delta_threshold=float(os.getenv("FACEOPS_POSE_DELTA_THRESHOLD", "0.06")),
             max_upload_bytes=int(os.getenv("FACEOPS_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
+            max_samples_per_profile=int(os.getenv("FACEOPS_MAX_SAMPLES_PER_PROFILE", "5")),
+            min_face_size=int(os.getenv("FACEOPS_MIN_FACE_SIZE", "120")),
+            min_detection_score=float(os.getenv("FACEOPS_MIN_DETECTION_SCORE", "0.65")),
+            min_face_sharpness=float(os.getenv("FACEOPS_MIN_FACE_SHARPNESS", "35")),
+            min_face_brightness=float(os.getenv("FACEOPS_MIN_FACE_BRIGHTNESS", "45")),
+            max_face_brightness=float(os.getenv("FACEOPS_MAX_FACE_BRIGHTNESS", "220")),
             signing_secret=os.getenv("FACEOPS_SIGNING_SECRET", DEVELOPMENT_SECRET),
             admin_token=os.getenv("FACEOPS_ADMIN_TOKEN", ""),
         )
@@ -63,3 +75,13 @@ class Settings:
             raise RuntimeError("FACEOPS_CHALLENGE_TTL_SECONDS must be at least 20 seconds.")
         if not 0 < self.pose_delta_threshold < 1:
             raise RuntimeError("FACEOPS_POSE_DELTA_THRESHOLD must be between 0 and 1.")
+        if self.max_samples_per_profile < 1:
+            raise RuntimeError("FACEOPS_MAX_SAMPLES_PER_PROFILE must be at least 1.")
+        if self.min_face_size < 32:
+            raise RuntimeError("FACEOPS_MIN_FACE_SIZE must be at least 32 pixels.")
+        if not 0 < self.min_detection_score <= 1:
+            raise RuntimeError("FACEOPS_MIN_DETECTION_SCORE must be between 0 and 1.")
+        if self.min_face_sharpness <= 0:
+            raise RuntimeError("FACEOPS_MIN_FACE_SHARPNESS must be greater than 0.")
+        if not 0 <= self.min_face_brightness < self.max_face_brightness <= 255:
+            raise RuntimeError("Face brightness limits must be between 0 and 255 in ascending order.")

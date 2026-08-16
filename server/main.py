@@ -17,7 +17,13 @@ from pydantic import BaseModel
 
 from .config import Settings
 from .database import Database, StoredProfile, Workspace
-from .face_service import FaceAnalysisError, FaceAnalysisTrace, FaceObservation, InsightFaceService
+from .face_service import (
+    FaceAnalysisError,
+    FaceAnalysisTrace,
+    FaceObservation,
+    InsightFaceService,
+    validate_enrollment_quality,
+)
 from .liveness import verify_pose_challenge
 
 
@@ -178,12 +184,36 @@ async def check_liveness(
     }
 
 
-def profile_payload(profile: StoredProfile) -> dict[str, object]:
+def profile_payload(profile: StoredProfile, sample_count: int | None = None) -> dict[str, object]:
     return {
         "id": profile.id,
         "name": profile.name,
         "source_mode": profile.source_mode,
         "created_at": as_iso(profile.created_at),
+        "sample_count": len(profile.samples) if sample_count is None else sample_count,
+    }
+
+
+def profile_detail_payload(profile: StoredProfile) -> dict[str, object]:
+    """Serialize the sensitive template only for the administrator-only endpoint."""
+
+    return {
+        "profile": profile_payload(profile),
+        "raw_image_storage": {
+            "stored": False,
+            "message": "Ảnh gốc không được lưu trên server; chỉ embedding float32 được lưu.",
+        },
+        "samples": [
+            {
+                "id": sample.id,
+                "source_mode": sample.source_mode,
+                "created_at": as_iso(sample.created_at),
+                "quality_score": round(sample.quality_score, 3) if sample.quality_score is not None else None,
+                "embedding_dimension": sample.embedding_dim,
+                "embedding_vector": np.frombuffer(sample.embedding, dtype=np.float32).tolist(),
+            }
+            for sample in profile.samples
+        ],
     }
 
 
@@ -193,6 +223,21 @@ def bounding_box_payload(observation: FaceObservation) -> list[int]:
     if observation.bbox is None or observation.bbox.shape != (4,):
         return [0, 0, 0, 0]
     return [round(float(value)) for value in observation.bbox]
+
+
+def quality_payload(observation: FaceObservation) -> dict[str, object] | None:
+    """Return numeric diagnostics only; the submitted image itself stays in memory."""
+
+    if observation.quality is None:
+        return None
+    return {
+        "face_width": observation.quality.width,
+        "face_height": observation.quality.height,
+        "detection_score": round(observation.quality.detection_score, 3),
+        "brightness": round(observation.quality.brightness, 1),
+        "sharpness": round(observation.quality.sharpness, 1),
+        "score": round(observation.quality.score, 3),
+    }
 
 
 @app.on_event("startup")
@@ -247,6 +292,20 @@ async def list_profiles(
         "profiles": [profile_payload(p) for p in profiles],
     }
 
+
+@app.get("/api/profiles/{profile_id}/details")
+async def get_profile_details(
+    profile_id: str,
+    _: Annotated[None, Depends(require_admin)],
+) -> dict[str, object]:
+    """Expose biometric template diagnostics to the authenticated administrator only."""
+
+    workspace = database.public_workspace()
+    profile = database.profile_for_workspace(workspace.id, profile_id, include_embeddings=True)
+    if not profile:
+        api_error(404, "profile_not_found", "Hồ sơ không tồn tại.")
+    return profile_detail_payload(profile)
+
 @app.delete("/api/profiles/{profile_id}", status_code=204)
 async def delete_profile(
     profile_id: str,
@@ -285,6 +344,7 @@ async def register_profile(
     image: Annotated[UploadFile, File()],
     challenge_id: Annotated[str | None, Form()] = None,
     baseline_image: Annotated[UploadFile | None, File()] = None,
+    enrollment_token: Annotated[str | None, Form()] = None,
 ) -> dict[str, object]:
     request_started = time.perf_counter()
     if not consent:
@@ -294,15 +354,33 @@ async def register_profile(
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     workspace = database.public_workspace()
     observation, processing_steps = await analyze_image(image)
+    quality = validate_enrollment_quality(
+        observation,
+        min_face_size=settings.min_face_size,
+        min_detection_score=settings.min_detection_score,
+        min_sharpness=settings.min_face_sharpness,
+        min_brightness=settings.min_face_brightness,
+        max_brightness=settings.max_face_brightness,
+    )
+    processing_steps.append(trace_step("Chất lượng", "Ảnh khuôn mặt đạt điều kiện lưu mẫu."))
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
     storage_started = time.perf_counter()
-    profile = database.add_profile(
+    enrollment = database.enroll_profile_sample(
         workspace.id,
         clean_name,
         mode,
         observation.embedding.astype(np.float32).tobytes(),
         int(observation.embedding.size),
+        quality.score,
+        settings.max_samples_per_profile,
+        enrollment_token,
     )
+    if enrollment is None:
+        api_error(
+            409,
+            "profile_sample_limit_reached",
+            f"Hồ sơ này đã đủ {settings.max_samples_per_profile} mẫu. Hãy dùng Quản lý dữ liệu nếu cần thay đổi.",
+        )
     processing_steps.append(
         trace_step(
             "Server",
@@ -311,7 +389,14 @@ async def register_profile(
         )
     )
     return {
-        "profile": profile_payload(profile),
+        "profile": profile_payload(enrollment.profile, enrollment.sample_count),
+        "enrollment": {
+            "created_profile": enrollment.created_profile,
+            "sample_count": enrollment.sample_count,
+            "max_samples": settings.max_samples_per_profile,
+            "enrollment_token": enrollment.enrollment_token,
+        },
+        "quality": quality_payload(observation),
         "liveness": liveness,
         "processing": {
             "steps": processing_steps,
@@ -348,13 +433,14 @@ async def recognize_face(
         best_profile: StoredProfile | None = None
         best_similarity = -1.0
         for profile in profiles:
-            if profile.embedding_dim != observation.embedding.size:
-                continue
-            candidate = np.frombuffer(profile.embedding, dtype=np.float32)
-            similarity = float(np.dot(observation.embedding, candidate))
-            if similarity > best_similarity:
-                best_similarity = similarity
-                best_profile = profile
+            for sample in profile.samples:
+                if sample.embedding_dim != observation.embedding.size:
+                    continue
+                candidate = np.frombuffer(sample.embedding, dtype=np.float32)
+                similarity = float(np.dot(observation.embedding, candidate))
+                if similarity > best_similarity:
+                    best_similarity = similarity
+                    best_profile = profile
         matched = best_profile is not None and best_similarity >= settings.match_threshold
         recognition_faces.append(
             {
@@ -362,6 +448,7 @@ async def recognize_face(
                 "matched": matched,
                 "similarity": round(best_similarity, 4) if best_profile is not None else None,
                 "profile": profile_payload(best_profile) if matched and best_profile else None,
+                "quality": quality_payload(observation),
             }
         )
 

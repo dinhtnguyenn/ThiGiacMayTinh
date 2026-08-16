@@ -38,6 +38,28 @@ class StoredProfile:
     created_at: int
     embedding: bytes
     embedding_dim: int
+    samples: tuple["StoredProfileSample", ...] = ()
+
+
+@dataclass(frozen=True)
+class StoredProfileSample:
+    """One capture used to make an identity more tolerant of real conditions."""
+
+    id: str
+    profile_id: str
+    source_mode: str
+    created_at: int
+    embedding: bytes
+    embedding_dim: int
+    quality_score: float | None
+
+
+@dataclass(frozen=True)
+class EnrollmentResult:
+    profile: StoredProfile
+    sample_count: int
+    created_profile: bool
+    enrollment_token: str | None
 
 
 SCHEMA = """
@@ -65,11 +87,25 @@ CREATE TABLE IF NOT EXISTS face_profiles (
   source_mode TEXT NOT NULL,
   embedding BLOB NOT NULL,
   embedding_dim INTEGER NOT NULL,
+  enrollment_token_hash TEXT,
   created_at INTEGER NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS face_profiles_workspace_idx
   ON face_profiles(workspace_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS face_profile_samples (
+  id TEXT PRIMARY KEY,
+  profile_id TEXT NOT NULL REFERENCES face_profiles(id) ON DELETE CASCADE,
+  source_mode TEXT NOT NULL,
+  embedding BLOB NOT NULL,
+  embedding_dim INTEGER NOT NULL,
+  quality_score REAL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS face_profile_samples_profile_idx
+  ON face_profile_samples(profile_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS notebook_imports (
   id TEXT PRIMARY KEY,
@@ -94,9 +130,11 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as connection:
             connection.executescript(SCHEMA)
+            self._ensure_profile_enrollment_token_column(connection)
             now = int(time.time())
             self._ensure_public_directory(connection, now)
             self._migrate_to_public_directory(connection)
+            self._migrate_legacy_embeddings_to_samples(connection)
             self._prune_expired(connection, now)
 
     @contextmanager
@@ -129,6 +167,14 @@ class Database:
             ),
         )
 
+    @staticmethod
+    def _ensure_profile_enrollment_token_column(connection: sqlite3.Connection) -> None:
+        """Add the optional continuation secret without rebuilding an old database."""
+
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(face_profiles)")}
+        if "enrollment_token_hash" not in columns:
+            connection.execute("ALTER TABLE face_profiles ADD COLUMN enrollment_token_hash TEXT")
+
     def _prune_expired(self, connection: sqlite3.Connection, now: int) -> None:
         connection.execute("DELETE FROM liveness_challenges WHERE expires_at <= ?", (now,))
         connection.execute("DELETE FROM workspaces WHERE expires_at <= ?", (now,))
@@ -146,6 +192,27 @@ class Database:
             (PUBLIC_DIRECTORY_ID, PUBLIC_DIRECTORY_ID),
         )
 
+    @staticmethod
+    def _migrate_legacy_embeddings_to_samples(connection: sqlite3.Connection) -> None:
+        """Expose every pre-upgrade embedding as the first sample of its profile.
+
+        The original embedding columns remain untouched as a rollback-friendly legacy
+        record.  The deterministic sample id makes this migration idempotent across
+        application restarts and CI/CD deployments.
+        """
+
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO face_profile_samples
+              (id, profile_id, source_mode, embedding, embedding_dim, quality_score, created_at)
+            SELECT 'legacy:' || id, id, source_mode, embedding, embedding_dim, NULL, created_at
+            FROM face_profiles AS profile
+            WHERE NOT EXISTS (
+              SELECT 1 FROM face_profile_samples AS sample WHERE sample.profile_id = profile.id
+            )
+            """
+        )
+
     def public_workspace(self) -> Workspace:
         """Return the one directory shared by every browser and device."""
 
@@ -153,6 +220,7 @@ class Database:
             now = int(time.time())
             self._ensure_public_directory(connection, now)
             self._migrate_to_public_directory(connection)
+            self._migrate_legacy_embeddings_to_samples(connection)
             self._prune_expired(connection, now)
         return Workspace(id=PUBLIC_DIRECTORY_ID, expires_at=PUBLIC_DIRECTORY_EXPIRY)
 
@@ -174,6 +242,22 @@ class Database:
     def profiles_for_public_directory(self, include_embeddings: bool) -> list[StoredProfile]:
         self.public_workspace()
         return self.profiles_for_workspace(PUBLIC_DIRECTORY_ID, include_embeddings)
+
+    def profile_for_workspace(
+        self,
+        workspace_id: str,
+        profile_id: str,
+        include_embeddings: bool,
+    ) -> StoredProfile | None:
+        """Return one profile including samples only for an authorized caller."""
+
+        return next(
+            (
+                profile for profile in self.profiles_for_workspace(workspace_id, include_embeddings)
+                if profile.id == profile_id
+            ),
+            None,
+        )
 
     def workspace_for_token(self, token: str) -> Workspace | None:
         now = int(time.time())
@@ -242,7 +326,153 @@ class Database:
                     profile.created_at,
                 ),
             )
-        return profile
+            sample = self._insert_sample(
+                connection,
+                profile.id,
+                source_mode,
+                embedding,
+                embedding_dim,
+                quality_score=None,
+                created_at=profile.created_at,
+            )
+        return StoredProfile(**{**profile.__dict__, "samples": (sample,)})
+
+    @staticmethod
+    def _insert_sample(
+        connection: sqlite3.Connection,
+        profile_id: str,
+        source_mode: str,
+        embedding: bytes,
+        embedding_dim: int,
+        quality_score: float | None,
+        created_at: int,
+    ) -> StoredProfileSample:
+        sample = StoredProfileSample(
+            id=str(uuid.uuid4()),
+            profile_id=profile_id,
+            source_mode=source_mode,
+            embedding=embedding,
+            embedding_dim=embedding_dim,
+            quality_score=quality_score,
+            created_at=created_at,
+        )
+        connection.execute(
+            """
+            INSERT INTO face_profile_samples
+              (id, profile_id, source_mode, embedding, embedding_dim, quality_score, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                sample.id,
+                sample.profile_id,
+                sample.source_mode,
+                sample.embedding,
+                sample.embedding_dim,
+                sample.quality_score,
+                sample.created_at,
+            ),
+        )
+        return sample
+
+    def enroll_profile_sample(
+        self,
+        workspace_id: str,
+        name: str,
+        source_mode: str,
+        embedding: bytes,
+        embedding_dim: int,
+        quality_score: float,
+        max_samples: int,
+        enrollment_token: str | None = None,
+    ) -> EnrollmentResult | None:
+        """Create an identity or add a distinct capture to its existing identity.
+
+        A name alone never authorizes adding a capture to an existing identity.
+        The caller must present the session-held continuation secret
+        returned during its first enrollment. This prevents a public visitor from
+        poisoning another person's directory record by typing their name.
+        """
+
+        now = int(time.time())
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, source_mode, embedding, embedding_dim, enrollment_token_hash, created_at
+                FROM face_profiles WHERE workspace_id = ? ORDER BY created_at ASC
+                """,
+                (workspace_id,),
+            ).fetchall()
+            supplied_token_hash = (
+                token_digest(enrollment_token, self.signing_secret) if enrollment_token else None
+            )
+            row = next(
+                (
+                    item for item in rows
+                    if item["name"].casefold() == name.casefold()
+                    and supplied_token_hash
+                    and item["enrollment_token_hash"] == supplied_token_hash
+                ),
+                None,
+            )
+            created_profile = row is None
+            issued_token: str | None = None
+            if row is None:
+                issued_token = create_workspace_token()
+                profile = StoredProfile(
+                    id=str(uuid.uuid4()),
+                    name=name,
+                    source_mode=source_mode,
+                    embedding=embedding,
+                    embedding_dim=embedding_dim,
+                    created_at=now,
+                )
+                connection.execute(
+                    """
+                    INSERT INTO face_profiles
+                      (id, workspace_id, name, source_mode, embedding, embedding_dim, enrollment_token_hash, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile.id,
+                        workspace_id,
+                        profile.name,
+                        profile.source_mode,
+                        profile.embedding,
+                        profile.embedding_dim,
+                        token_digest(issued_token, self.signing_secret),
+                        profile.created_at,
+                    ),
+                )
+            else:
+                profile = StoredProfile(
+                    id=row["id"],
+                    name=row["name"],
+                    source_mode=row["source_mode"],
+                    embedding=bytes(row["embedding"]),
+                    embedding_dim=row["embedding_dim"],
+                    created_at=row["created_at"],
+                )
+            sample_count = connection.execute(
+                "SELECT COUNT(*) FROM face_profile_samples WHERE profile_id = ?",
+                (profile.id,),
+            ).fetchone()[0]
+            if sample_count >= max_samples:
+                return None
+            sample = self._insert_sample(
+                connection,
+                profile.id,
+                source_mode,
+                embedding,
+                embedding_dim,
+                quality_score,
+                now,
+            )
+        return EnrollmentResult(
+            profile=StoredProfile(**{**profile.__dict__, "samples": (sample,)}),
+            sample_count=sample_count + 1,
+            created_profile=created_profile,
+            enrollment_token=issued_token,
+        )
 
     def profiles_for_workspace(self, workspace_id: str, include_embeddings: bool) -> list[StoredProfile]:
         fields = "id, name, source_mode, created_at, embedding, embedding_dim" if include_embeddings else "id, name, source_mode, created_at, X'' AS embedding, 0 AS embedding_dim"
@@ -251,6 +481,30 @@ class Database:
                 f"SELECT {fields} FROM face_profiles WHERE workspace_id = ? ORDER BY created_at DESC",
                 (workspace_id,),
             ).fetchall()
+            profile_ids = [row["id"] for row in rows]
+            sample_fields = (
+                "id, profile_id, source_mode, embedding, embedding_dim, quality_score, created_at"
+                if include_embeddings
+                else "id, profile_id, source_mode, X'' AS embedding, 0 AS embedding_dim, quality_score, created_at"
+            )
+            sample_rows = connection.execute(
+                f"SELECT {sample_fields} FROM face_profile_samples "
+                f"WHERE profile_id IN ({','.join('?' for _ in profile_ids)}) ORDER BY created_at ASC",
+                profile_ids,
+            ).fetchall() if profile_ids else []
+        samples_by_profile: dict[str, list[StoredProfileSample]] = {profile_id: [] for profile_id in profile_ids}
+        for row in sample_rows:
+            samples_by_profile[row["profile_id"]].append(
+                StoredProfileSample(
+                    id=row["id"],
+                    profile_id=row["profile_id"],
+                    source_mode=row["source_mode"],
+                    embedding=bytes(row["embedding"]),
+                    embedding_dim=row["embedding_dim"],
+                    quality_score=row["quality_score"],
+                    created_at=row["created_at"],
+                )
+            )
         return [
             StoredProfile(
                 id=row["id"],
@@ -259,6 +513,7 @@ class Database:
                 embedding=bytes(row["embedding"]),
                 embedding_dim=row["embedding_dim"],
                 created_at=row["created_at"],
+                samples=tuple(samples_by_profile[row["id"]]),
             )
             for row in rows
         ]
