@@ -4,13 +4,27 @@ services:
     env_file:
       - path: .env
         required: false
-    ports:
-      - "8000:8000"
+    expose:
+      - "8000"
     volumes:
       - faceops-data:/data
       - faceops-models:/models
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    command: caddy reverse-proxy --from https://polyoj.io.vn --to http://faceops:8000
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
 volumes:
   faceops-data:
   faceops-models:
+  caddy_data:
+  caddy_config:
