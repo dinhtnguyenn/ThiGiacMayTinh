@@ -655,3 +655,113 @@ h2 {
     transition-duration: 150ms !important;
   }
 }
+
+/* Tabs */
+.tabs-container {
+  margin-block-start: var(--space-xl);
+}
+.tabs {
+  display: flex;
+  gap: var(--space-md);
+  border-bottom: var(--rule) solid var(--color-rule-2);
+}
+.tab-button {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: var(--space-sm) var(--space-md);
+  color: var(--color-muted);
+  font-weight: 600;
+  font-size: var(--text-sm);
+  transition: all 0.2s ease;
+  margin-bottom: -1px;
+}
+.tab-button:hover {
+  color: var(--color-ink);
+}
+.tab-button.is-active {
+  color: var(--color-accent);
+  border-bottom-color: var(--color-accent);
+}
+
+/* Management Panel & Table */
+.manage-panel {
+  padding: var(--space-xl) var(--space-lg);
+  min-width: 0;
+  width: 100%;
+}
+.manage-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-block-end: var(--space-lg);
+}
+.table-container {
+  overflow-x: auto;
+  border: var(--rule) solid var(--color-rule-2);
+  border-radius: var(--radius-sm);
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--text-sm);
+}
+.data-table th,
+.data-table td {
+  padding: var(--space-md);
+  border-bottom: var(--rule) solid var(--color-rule-2);
+}
+.data-table th {
+  background: var(--color-paper-2);
+  font-weight: 600;
+  color: var(--color-ink-2);
+}
+.data-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.col-actions {
+  text-align: right;
+  width: 150px;
+}
+.data-table td.col-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+}
+
+/* Dialog */
+.edit-dialog {
+  border: none;
+  border-radius: var(--radius-md);
+  padding: var(--space-xl);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+  width: min(100% - var(--space-xl), 28rem);
+}
+.edit-dialog::backdrop {
+  background: rgba(0,0,0,0.4);
+  backdrop-filter: blur(2px);
+}
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  margin-top: var(--space-lg);
+}
+.field-group {
+  margin-top: var(--space-md);
+}
+.text-center {
+  text-align: center;
+}
+.view-grid {
+  display: grid;
+}
+@media (min-width: 60rem) {
+  .view-grid {
+    grid-template-columns: minmax(0, 1.05fr) minmax(23rem, 0.95fr);
+  }
+}
+

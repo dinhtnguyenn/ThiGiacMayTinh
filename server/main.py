@@ -182,10 +182,35 @@ async def create_liveness_challenge(
 
 @app.get("/api/profiles")
 async def list_profiles() -> dict[str, object]:
-    """Expose only the number of shared entries; names are returned on a confirmed match."""
+    """Expose shared entries with names and IDs."""
 
     profiles = database.profiles_for_public_directory(include_embeddings=False)
-    return {"profile_count": len(profiles)}
+    return {
+        "profile_count": len(profiles),
+        "profiles": [profile_payload(p) for p in profiles],
+    }
+
+@app.delete("/api/profiles/{profile_id}", status_code=204)
+async def delete_profile(profile_id: str) -> Response:
+    workspace = database.public_workspace()
+    deleted = database.delete_profile(workspace.id, profile_id)
+    if not deleted:
+        api_error(404, "profile_not_found", "Hồ sơ không tồn tại.")
+    return Response(status_code=204)
+
+class ProfileUpdateRequest(BaseModel):
+    name: str
+
+@app.put("/api/profiles/{profile_id}")
+async def update_profile(profile_id: str, payload: ProfileUpdateRequest) -> dict[str, object]:
+    clean_name = " ".join(payload.name.split())
+    if not clean_name:
+        api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
+    workspace = database.public_workspace()
+    updated = database.update_profile(workspace.id, profile_id, clean_name)
+    if not updated:
+        api_error(404, "profile_not_found", "Hồ sơ không tồn tại.")
+    return {"status": "success", "id": profile_id, "name": clean_name}
 
 
 @app.post("/api/profiles", status_code=201)

@@ -263,6 +263,22 @@ class Database:
             for row in rows
         ]
 
+    def delete_profile(self, workspace_id: str, profile_id: str) -> bool:
+        with self.connection() as connection:
+            result = connection.execute(
+                "DELETE FROM face_profiles WHERE id = ? AND workspace_id = ?",
+                (profile_id, workspace_id),
+            )
+        return result.rowcount == 1
+
+    def update_profile(self, workspace_id: str, profile_id: str, new_name: str) -> bool:
+        with self.connection() as connection:
+            result = connection.execute(
+                "UPDATE face_profiles SET name = ? WHERE id = ? AND workspace_id = ?",
+                (new_name, profile_id, workspace_id),
+            )
+        return result.rowcount == 1
+
     def add_notebook(
         self,
         workspace_id: str,
