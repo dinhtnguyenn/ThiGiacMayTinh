@@ -19,6 +19,9 @@ services:
       - "443:443"
       - "443:443/udp"
     command: caddy reverse-proxy --from https://polyoj.io.vn --to http://faceops:8000
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     volumes:
       - caddy_data:/data
       - caddy_config:/config
