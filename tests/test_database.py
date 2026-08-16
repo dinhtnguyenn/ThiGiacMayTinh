@@ -25,15 +25,19 @@ class DatabaseTests(unittest.TestCase):
             self.assertTrue(database.consume_challenge(workspace.id, challenge.id))
             self.assertFalse(database.consume_challenge(workspace.id, challenge.id))
 
-    def test_profiles_do_not_leave_their_workspace(self) -> None:
+    def test_legacy_profiles_are_moved_to_the_shared_directory_before_pruning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = self.create_database(directory)
             first, _ = database.create_workspace()
-            second, _ = database.create_workspace()
             database.add_profile(first.id, "Owner", "image", b"1234", 1)
 
-            self.assertEqual(len(database.profiles_for_workspace(first.id, include_embeddings=False)), 1)
-            self.assertEqual(database.profiles_for_workspace(second.id, include_embeddings=False), [])
+            # A new process opening the existing database represents a CI/CD restart.
+            database = self.create_database(directory)
+            public = database.public_workspace()
+
+            profiles = database.profiles_for_public_directory(include_embeddings=False)
+            self.assertEqual({profile.name for profile in profiles}, {"Owner"})
+            self.assertEqual(database.profiles_for_workspace(first.id, include_embeddings=False), [])
 
 
 if __name__ == "__main__":

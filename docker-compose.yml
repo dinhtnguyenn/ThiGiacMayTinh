@@ -27,7 +27,9 @@ services:
       - caddy_config:/config
 
 volumes:
+  # Required so a CI job cannot silently create a second, empty database volume.
   faceops-data:
+    name: ${FACEOPS_DATA_VOLUME:?Set FACEOPS_DATA_VOLUME to the existing Docker volume name}
   faceops-models:
   caddy_data:
   caddy_config:

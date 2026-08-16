@@ -170,8 +170,8 @@ async def create_workspace(payload: WorkspaceRequest) -> dict[str, object]:
 
 @app.post("/api/liveness/challenge")
 async def create_liveness_challenge(
-    workspace: Annotated[Workspace, Depends(require_workspace)],
 ) -> dict[str, object]:
+    workspace = database.public_workspace()
     challenge = database.create_challenge(workspace.id, settings.challenge_ttl_seconds)
     return {
         "challenge_id": challenge.id,
@@ -181,25 +181,28 @@ async def create_liveness_challenge(
 
 
 @app.get("/api/profiles")
-async def list_profiles(
-    workspace: Annotated[Workspace, Depends(require_workspace)],
-) -> dict[str, object]:
-    profiles = database.profiles_for_workspace(workspace.id, include_embeddings=False)
-    return {"profiles": [profile_payload(profile) for profile in profiles]}
+async def list_profiles() -> dict[str, object]:
+    """Expose only the number of shared entries; names are returned on a confirmed match."""
+
+    profiles = database.profiles_for_public_directory(include_embeddings=False)
+    return {"profile_count": len(profiles)}
 
 
 @app.post("/api/profiles", status_code=201)
 async def register_profile(
-    workspace: Annotated[Workspace, Depends(require_workspace)],
     name: Annotated[str, Form(min_length=2, max_length=100)],
+    consent: Annotated[bool, Form()],
     mode: Annotated[str, Form()],
     image: Annotated[UploadFile, File()],
     challenge_id: Annotated[str | None, Form()] = None,
     baseline_image: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
+    if not consent:
+        api_error(422, "consent_required", "Cần đồng ý lưu tên và embedding khuôn mặt trên server trước khi tiếp tục.")
     clean_name = " ".join(name.split())
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
+    workspace = database.public_workspace()
     observation = await analyze_image(image)
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
     profile = database.add_profile(
@@ -214,12 +217,12 @@ async def register_profile(
 
 @app.post("/api/recognitions")
 async def recognize_face(
-    workspace: Annotated[Workspace, Depends(require_workspace)],
     mode: Annotated[str, Form()],
     image: Annotated[UploadFile, File()],
     challenge_id: Annotated[str | None, Form()] = None,
     baseline_image: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
+    workspace = database.public_workspace()
     observation = await analyze_image(image)
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
     profiles = database.profiles_for_workspace(workspace.id, include_embeddings=True)

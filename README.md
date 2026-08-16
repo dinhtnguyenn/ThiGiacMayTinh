@@ -6,22 +6,35 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 | Feature | Behavior |
 | --- | --- |
-| Face registration | Detects exactly one face, creates an InsightFace embedding, and stores it in the current private workspace. |
-| Face recognition | Creates an embedding for the submitted frame and compares it by cosine similarity only against profiles in the same workspace. |
-| Liveness mode | Requires two freshly captured webcam frames with a measurable head-pose change. The second frame is verified against the first frame. |
-| Static image mode | Processes a selected image or a camera snapshot as a static image. It deliberately does not claim a liveness verdict. |
-| Notebook import | Parses `.ipynb` JSON and stores only filename, nbformat, kernel name, and cell counts. It never executes a notebook or imports weights from it. |
-| Workspace deletion | Deletes the workspace's profiles, liveness challenges, and notebook metadata immediately. Expired workspaces are also pruned automatically. |
+| Face registration | The user enters a name, opens the webcam, and saves one detected face as an InsightFace embedding on the server. |
+| Face recognition | Any device using the same deployed website can identify a face registered on the server. The app shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
+| Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
-## Privacy model
+## Simple user flow
 
-- A browser creates an opaque workspace token only after explicit consent. The browser keeps that token in its local storage; the server stores only a keyed HMAC-SHA-256 digest of it.
-- Names and embeddings are server-side and scoped to that workspace. There is no global person search and one workspace cannot list or recognize profiles from another workspace.
+The public interface deliberately contains only two screens:
+
+1. **Đăng ký** — enter a name, consent to shared server storage, open the webcam, then select **Đăng ký khuôn mặt**.
+2. **Nhận diện** — the app moves here automatically after a successful registration. Select **Nhận diện khuôn mặt** to show the stored name or **Chưa có dữ liệu**.
+
+The simple UI sends a fresh webcam frame in static-image mode. It does not expose the former liveness or notebook controls.
+
+## Shared server storage
+
+- The simple website uses one shared server-side directory. A face registered from device A can be recognized from device B, as long as both devices use the same deployed website and database.
+- The browser does not store a face embedding, image, profile, or workspace token. The SQLite database in the server's persistent `/data` volume stores the name and InsightFace embedding.
+- The API does not return a list of registered names. A name is returned only after a submitted face reaches the configured match threshold.
 - Submitted images are decoded in memory to make an embedding and are not written to the application database or file volume. Configure the reverse proxy and application logs so they do not capture request bodies, tokens, or raw images.
-- The default retention period is 30 days. Change `FACEOPS_RETENTION_DAYS` before deployment to match the privacy notice and consent policy you actually use.
-- This project is suitable for consented, limited-scope use. Before collecting biometric data from the public, obtain the legal review, consent wording, retention policy, security controls, and incident process applicable in the deployment jurisdiction.
+- Shared profiles are retained in the server database until an administrator deliberately removes them. `FACEOPS_RETENTION_DAYS` applies only to the legacy workspace integration retained for backward compatibility.
+- This makes every successful registration searchable by every visitor to this deployment. Use it only for a consented, controlled group; protect the site with access control if it is not intended to be a fully public directory. Obtain the legal review, consent wording, retention policy, security controls, and incident process applicable in the deployment jurisdiction.
 
-## Important liveness limitation
+At startup, the upgrade moves existing face profiles and notebook metadata from legacy workspaces into the shared directory in the same SQLite transaction that initializes the schema. It does not recreate the database, delete profiles, or copy raw images. This makes pre-existing profiles available from every device, matching the shared-directory setting.
+
+## Advanced API capabilities
+
+The server retains optional liveness and notebook-inspection endpoints for controlled integrations, but the streamlined public UI does not expose them. If a separate client uses the liveness API, observe the limitation below.
+
+### Important liveness limitation
 
 The included liveness check is a real **two-frame head-pose challenge**: capture a baseline webcam frame, turn the head slightly left or right, then submit a second webcam frame. It generally rejects a single unchanged photo in the normal web flow.
 
@@ -48,6 +61,22 @@ docker compose down
 
 `docker compose down` keeps the named volumes and their data. To delete all local biometric data and cached models, explicitly remove the `faceops-data` and `faceops-models` volumes after confirming that this is appropriate for the environment.
 
+### CI/CD data safety
+
+The SQLite file is persisted in the Docker named volume mounted at `/data`; it is not part of the image and is not overwritten by `docker compose up -d --build`. Before the first CI/CD deploy, set `FACEOPS_DATA_VOLUME` in the server's `.env` or in the pipeline's protected environment variables to the **existing** data-volume name. Find it once on the server:
+
+```bash
+docker volume ls --format '{{.Name}}' | grep 'faceops-data'
+```
+
+For example, if the command shows `faceops_faceops-data`, use exactly:
+
+```bash
+FACEOPS_DATA_VOLUME=faceops_faceops-data
+```
+
+The Compose file intentionally fails if this variable is absent. This is safer than letting a CI job create a fresh empty database because its Compose project name changed. Keep the same value for every deployment. Do not run `docker compose down -v`, `docker volume rm ...`, `docker system prune --volumes`, or a CI cleanup job that removes this volume.
+
 ## Configure before public deployment
 
 The application is deployable as a single container, but a public biometric service needs operational controls around it.
@@ -55,31 +84,23 @@ The application is deployable as a single container, but a public biometric serv
 1. Set `FACEOPS_ENV=production` and replace `FACEOPS_SIGNING_SECRET` in `.env` with a long random value. The API refuses to start in production when the development value remains.
 2. Put the container behind an HTTPS reverse proxy such as Caddy, Nginx, Cloudflare, or a managed load balancer. Use the public HTTPS URL for the page; camera access is restricted by browsers on insecure origins outside `localhost`.
 3. Add request size limits, rate limits, WAF/DDoS protection, monitoring, alerting, logs that do not include raw images or tokens, and a restrictive Content Security Policy at the reverse proxy.
-4. Put `/data` and `/models` on encrypted persistent storage, use managed backup policies, and set `FACEOPS_RETENTION_DAYS` to the documented retention period. Test the in-product delete action as part of your release process.
+4. Put `/data` and `/models` on encrypted persistent storage, use managed backup policies, and set `FACEOPS_RETENTION_DAYS` to the documented retention period. Establish an administrator-only deletion process before collecting production data.
 5. Keep the frontend and API on the same HTTPS origin unless you deliberately configure CORS with a small allowlist. Do not serve the repository root as static files; this project exposes only the four required frontend assets.
 6. Calibrate `FACEOPS_MATCH_THRESHOLD` and `FACEOPS_POSE_DELTA_THRESHOLD` with consented evaluation data from the intended camera, lighting, demographics, and use case. Their default values are starting configuration values, not universal accuracy guarantees.
 
 ### Scale-out note
 
-The included SQLite database and local Docker volumes are intentionally simple and correct for one running container. Do not horizontally scale this exact configuration: separate replicas will not share workspace state or embeddings. For multiple replicas, replace SQLite with PostgreSQL, use encrypted managed/object storage for model assets, add a migration strategy, and move any long-running work to a queue. Preserve the workspace isolation rule in the new data layer.
+The included SQLite database and local Docker volumes are intentionally simple and correct for one running container. Do not horizontally scale this exact configuration: separate replicas will not share the directory or embeddings. For multiple replicas, replace SQLite with PostgreSQL, use encrypted managed/object storage for model assets, add a migration strategy, and move any long-running work to a queue.
 
 ## API flow
 
-All API paths are under `/api`. Other than workspace creation and health checks, requests require:
-
-```text
-Authorization: Bearer <workspace_token>
-```
-
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/workspaces` | Creates a private workspace after `{ "consent": true }`. The opaque token is returned once. |
-| `POST /api/liveness/challenge` | Creates a one-time 90-second challenge for the current workspace. |
-| `POST /api/profiles` | Registers one face with `name`, `mode`, `image`, and liveness fields when applicable. |
-| `GET /api/profiles` | Lists profile names and metadata without embeddings. |
-| `POST /api/recognitions` | Compares one submitted face with current-workspace profiles. |
-| `POST /api/models/notebook` | Safely parses notebook metadata only. |
-| `DELETE /api/workspaces/current` | Deletes all data for the current workspace. |
+| `POST /api/profiles` | Registers one consented face in the shared server directory. Requires `name`, `consent=true`, `mode`, `image`, and liveness fields when applicable. |
+| `POST /api/recognitions` | Compares one submitted face with the shared server directory. |
+| `GET /api/profiles` | Returns only the number of retained shared profiles, not names or embeddings. |
+| `POST /api/liveness/challenge` | Creates a one-time 90-second challenge for the shared directory flow. |
+| `POST /api/workspaces`, `POST /api/models/notebook`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 
 Image uploads are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid files, no-face images, and images with more than one face.
 
@@ -104,4 +125,4 @@ docker compose run --rm faceops python -m py_compile server/*.py
 docker compose run --rm faceops python -m unittest discover -s tests
 ```
 
-The tests cover workspace isolation, one-time liveness challenge use, and pose-change threshold logic. They deliberately do not upload or fabricate biometric images. Verify a real registration and recognition flow manually with a consented face and a camera after deployment.
+The tests cover the shared-directory boundary, legacy workspace handling, one-time liveness challenge use, and pose-change threshold logic. They deliberately do not upload or fabricate biometric images. Verify a real registration and recognition flow manually with a consented face and a camera after deployment.

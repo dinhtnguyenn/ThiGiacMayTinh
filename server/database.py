@@ -1,4 +1,4 @@
-"""Small SQLite repository scoped by an opaque workspace token."""
+"""Small SQLite repository for legacy workspaces and the shared face directory."""
 
 from __future__ import annotations
 
@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Iterator
 
 from .security import create_workspace_token, token_digest
+
+
+PUBLIC_DIRECTORY_ID = "faceops-public-directory-v1"
+PUBLIC_DIRECTORY_TOKEN = "internal-public-directory"
+PUBLIC_DIRECTORY_EXPIRY = 2_147_483_647
 
 
 @dataclass(frozen=True)
@@ -89,7 +94,10 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connection() as connection:
             connection.executescript(SCHEMA)
-            self._prune_expired(connection, int(time.time()))
+            now = int(time.time())
+            self._ensure_public_directory(connection, now)
+            self._migrate_to_public_directory(connection)
+            self._prune_expired(connection, now)
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -105,10 +113,48 @@ class Database:
         finally:
             connection.close()
 
-    @staticmethod
-    def _prune_expired(connection: sqlite3.Connection, now: int) -> None:
+    def _ensure_public_directory(self, connection: sqlite3.Connection, now: int) -> None:
+        """Create the stable server-side owner used by the public registration flow."""
+
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO workspaces (id, token_hash, created_at, expires_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                PUBLIC_DIRECTORY_ID,
+                token_digest(PUBLIC_DIRECTORY_TOKEN, self.signing_secret),
+                now,
+                PUBLIC_DIRECTORY_EXPIRY,
+            ),
+        )
+
+    def _prune_expired(self, connection: sqlite3.Connection, now: int) -> None:
         connection.execute("DELETE FROM liveness_challenges WHERE expires_at <= ?", (now,))
         connection.execute("DELETE FROM workspaces WHERE expires_at <= ?", (now,))
+
+    @staticmethod
+    def _migrate_to_public_directory(connection: sqlite3.Connection) -> None:
+        """Move legacy records in place before an expired workspace can cascade-delete them."""
+
+        connection.execute(
+            "UPDATE face_profiles SET workspace_id = ? WHERE workspace_id != ?",
+            (PUBLIC_DIRECTORY_ID, PUBLIC_DIRECTORY_ID),
+        )
+        connection.execute(
+            "UPDATE notebook_imports SET workspace_id = ? WHERE workspace_id != ?",
+            (PUBLIC_DIRECTORY_ID, PUBLIC_DIRECTORY_ID),
+        )
+
+    def public_workspace(self) -> Workspace:
+        """Return the one directory shared by every browser and device."""
+
+        with self.connection() as connection:
+            now = int(time.time())
+            self._ensure_public_directory(connection, now)
+            self._migrate_to_public_directory(connection)
+            self._prune_expired(connection, now)
+        return Workspace(id=PUBLIC_DIRECTORY_ID, expires_at=PUBLIC_DIRECTORY_EXPIRY)
 
     def create_workspace(self) -> tuple[Workspace, str]:
         now = int(time.time())
@@ -124,6 +170,10 @@ class Database:
                 (workspace.id, token_digest(token, self.signing_secret), now, workspace.expires_at),
             )
         return workspace, token
+
+    def profiles_for_public_directory(self, include_embeddings: bool) -> list[StoredProfile]:
+        self.public_workspace()
+        return self.profiles_for_workspace(PUBLIC_DIRECTORY_ID, include_embeddings)
 
     def workspace_for_token(self, token: str) -> Workspace | None:
         now = int(time.time())

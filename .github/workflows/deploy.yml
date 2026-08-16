@@ -34,3 +34,6 @@ jobs:
             cd /root/ThiGiacMayTinh
             docker compose build
             docker compose up -d
+            docker compose ps
+            docker compose logs --tail=100 faceops
+            docker compose exec faceops sh -c 'test -s /data/faceops.sqlite3 && ls -lh /data/faceops.sqlite3'
