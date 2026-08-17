@@ -17,6 +17,11 @@ class Settings:
     database_path: Path
     model_root: Path
     insightface_model: str
+    detector_size: int
+    pad_model_path: Path
+    pad_model_url: str
+    pad_model_sha256: str
+    pad_live_threshold: float
     retention_days: int
     match_threshold: float
     challenge_ttl_seconds: int
@@ -39,12 +44,27 @@ class Settings:
         database_path = Path(
             os.getenv("FACEOPS_DATABASE_PATH", str(data_dir / "faceops.sqlite3"))
         ).resolve()
+        model_root = Path(os.getenv("FACEOPS_MODEL_ROOT", "./models")).resolve()
         return cls(
             app_env=os.getenv("FACEOPS_ENV", "development").lower(),
             data_dir=data_dir,
             database_path=database_path,
-            model_root=Path(os.getenv("FACEOPS_MODEL_ROOT", "./models")).resolve(),
+            model_root=model_root,
             insightface_model=os.getenv("FACEOPS_INSIGHTFACE_MODEL", "buffalo_l"),
+            detector_size=int(os.getenv("FACEOPS_DETECTOR_SIZE", "512")),
+            pad_model_path=Path(
+                os.getenv("FACEOPS_PAD_MODEL_PATH", str(model_root / "pad" / "minifasnet_v2.onnx"))
+            ).resolve(),
+            pad_model_url=os.getenv(
+                "FACEOPS_PAD_MODEL_URL",
+                "https://huggingface.co/garciafido/minifasnet-v2-anti-spoofing-onnx/resolve/"
+                "d29c87568ca9b5662da803b10f217c4db20b142b/minifasnet_v2.onnx",
+            ),
+            pad_model_sha256=os.getenv(
+                "FACEOPS_PAD_MODEL_SHA256",
+                "d7b3cd9ba8a7ceb13baa8c4720902e27ca3112eff52f926c08804af6b6eecc7b",
+            ),
+            pad_live_threshold=float(os.getenv("FACEOPS_PAD_LIVE_THRESHOLD", "0.80")),
             retention_days=int(os.getenv("FACEOPS_RETENTION_DAYS", "30")),
             match_threshold=float(os.getenv("FACEOPS_MATCH_THRESHOLD", "0.45")),
             challenge_ttl_seconds=int(os.getenv("FACEOPS_CHALLENGE_TTL_SECONDS", "90")),
@@ -79,6 +99,14 @@ class Settings:
             raise RuntimeError("FACEOPS_CHALLENGE_TTL_SECONDS must be at least 20 seconds.")
         if not 0 < self.pose_delta_threshold < 1:
             raise RuntimeError("FACEOPS_POSE_DELTA_THRESHOLD must be between 0 and 1.")
+        if self.detector_size < 256 or self.detector_size > 640 or self.detector_size % 32:
+            raise RuntimeError("FACEOPS_DETECTOR_SIZE must be a multiple of 32 between 256 and 640.")
+        if len(self.pad_model_sha256) != 64 or any(char not in "0123456789abcdefABCDEF" for char in self.pad_model_sha256):
+            raise RuntimeError("FACEOPS_PAD_MODEL_SHA256 must be a SHA-256 digest.")
+        if not self.pad_model_url.startswith("https://"):
+            raise RuntimeError("FACEOPS_PAD_MODEL_URL must use HTTPS.")
+        if not 0 < self.pad_live_threshold < 1:
+            raise RuntimeError("FACEOPS_PAD_LIVE_THRESHOLD must be between 0 and 1.")
         if self.max_samples_per_profile < 1:
             raise RuntimeError("FACEOPS_MAX_SAMPLES_PER_PROFILE must be at least 1.")
         if self.min_face_size < 32:

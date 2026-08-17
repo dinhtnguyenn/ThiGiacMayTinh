@@ -6,19 +6,19 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 | Feature | Behavior |
 | --- | --- |
-| Face registration | The user enters a name and the website automatically verifies a live camera subject before saving a quality-checked InsightFace embedding on the server. The same active browser session can add further captures to that identity. |
-| Face recognition | The website automatically verifies one live camera subject before comparing it to the shared directory. It shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
+| Face registration | The user enters a name and the website checks the camera face with passive presentation-attack detection (PAD) before saving a quality-checked InsightFace embedding on the server. The same active browser session can add further captures to that identity. |
+| Face recognition | The website checks every detected face in one camera frame, and compares only faces classified as live with the shared directory. It shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
 | Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
 ## User interface
 
 The website has three modules:
 
-1. **Đăng ký** — enter a name and choose `Đăng ký khuôn mặt`. The camera captures the necessary frames automatically and saves a sample only after live verification succeeds. There is no image-upload control.
-2. **Nhận diện** — opening this tab opens the camera and begins live verification automatically. Face boxes can track multiple people, but the system verifies and identifies one person at a time so it never labels an unverified person as live. If a photo, screen, or unchanged replay fails the challenge, the UI shows a warning instead of a name.
+1. **Đăng ký** — enter a name and choose `Đăng ký khuôn mặt`. The camera captures one in-memory frame and saves a sample only when PAD classifies that face as live. There is no image-upload control.
+2. **Nhận diện** — opening this tab opens the camera and continuously processes all detected faces at once. Only an individual face classified as live can reveal a matched name. A face classified as spoof or uncertain displays a warning and never receives an identity label.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, inspect each profile's stored samples and complete float32 embedding vectors, rename a profile, or delete one. It also states explicitly that source images are not stored. The token is kept only in the tab's memory and is never written to browser storage.
 
-The UI sends only freshly captured webcam frames. The public registration and recognition APIs require a one-time liveness challenge; a request in static-image mode is rejected. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browser-side registration tracking avoids redundant server requests; frames are resized to a 640 px maximum before they are sent for processing. Browsers without this API fall back to transient server tracking. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
+The UI sends only freshly captured webcam frames. Public registration and recognition require `mode=pad`; static requests cannot skip the presentation check. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace and PAD on the server determine the final state. Camera frames are resized to a 512 px maximum before processing and are never stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, model scores, or administrator tokens.
 
 ### Better enrollment and matching
 
@@ -40,15 +40,13 @@ The UI sends only freshly captured webcam frames. The public registration and re
 
 At startup, the upgrade moves existing face profiles into the shared directory in the same SQLite transaction that initializes the schema. The multi-sample migration also creates one sample record for every existing embedding, only when that profile has no samples yet. It is idempotent: restarts and CI/CD deployments neither recreate the database nor duplicate or delete existing profiles. This makes pre-existing profiles available from every device, matching the shared-directory setting.
 
-## Advanced API capabilities
+## Presentation-attack detection
 
-The server supports a controlled active-liveness challenge. Observe the limitation below.
+Each InsightFace face box is expanded and evaluated in a single batch by [MiniFASNet-V2](https://huggingface.co/garciafido/minifasnet-v2-anti-spoofing-onnx), an ONNX export of the Silent-Face-Anti-Spoofing model licensed under Apache-2.0. It returns `live`, `spoof`, or `uncertain` for every face. The server exposes only that decision and an attack category (`print` or `replay` when available); it does not expose model scores, source crops, or identities for non-live faces.
 
-### Important liveness limitation
+The model is downloaded from a revision-pinned HTTPS URL once to the persistent `/models` volume and verified against the configured SHA-256 before loading. The configured defaults are `FACEOPS_PAD_LIVE_THRESHOLD=0.80` and model checksum `d7b3cd9ba8a7ceb13baa8c4720902e27ca3112eff52f926c08804af6b6eecc7b`.
 
-The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, gives the subject 4 seconds to look straight briefly and then turn their head clearly left or right, then captures the second frame automatically. The default pose-delta threshold is `0.035`; it is a starting value that should be calibrated with consented test data. This generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
-
-It is **not** a certified presentation-attack-detection (PAD) or anti-spoofing system. A replayed video or a sophisticated attacker can still defeat it. Do not use this challenge alone for payment, identity proofing, access control, law-enforcement, or any high-risk decision. For those uses, integrate and calibrate a dedicated PAD model, hardware-backed capture controls, rate limits, audit trails, and a human-review path.
+This is passive PAD intended to reduce common print, screen, and replay attacks. It is **not certified** and cannot guarantee detection of every replay, deepfake, or sophisticated attack. Do not use it alone for payments, identity proofing, access control, law enforcement, or other high-risk decisions. Those uses need measured, consented evaluation data; an uncertain-face escalation such as a temporal/active challenge; rate limits and audit trails; and often IR/depth hardware or human review.
 
 ## Run locally with Docker
 
@@ -96,10 +94,11 @@ The application is deployable as a single container, but a public biometric serv
 3. Add request size limits, rate limits, WAF/DDoS protection, monitoring, alerting, logs that do not include raw images or tokens, and a restrictive Content Security Policy at the reverse proxy.
 4. Put `/data` and `/models` on encrypted persistent storage, use managed backup policies, and set `FACEOPS_RETENTION_DAYS` to the documented retention period. Establish an administrator-only deletion process before collecting production data.
 5. Keep the frontend and API on the same HTTPS origin unless you deliberately configure CORS with a small allowlist. Do not serve the repository root as static files; this project exposes only the four required frontend assets.
-6. Calibrate `FACEOPS_MATCH_THRESHOLD`, `FACEOPS_POSE_DELTA_THRESHOLD`, and the enrollment quality limits with consented evaluation data from the intended camera, lighting, demographics, and use case. Their default values are starting configuration values, not universal accuracy guarantees. Do not lower `FACEOPS_MATCH_THRESHOLD` merely to increase apparent match rate; measure false accepts and false rejects first.
+6. Calibrate `FACEOPS_MATCH_THRESHOLD`, `FACEOPS_PAD_LIVE_THRESHOLD`, and the enrollment quality limits with consented evaluation data from the intended camera, lighting, demographics, and use case. Their default values are starting configuration values, not universal accuracy guarantees. Do not lower `FACEOPS_MATCH_THRESHOLD` merely to increase apparent match rate; measure false accepts and false rejects first.
 
 ### Responsiveness controls
 
+- `FACEOPS_DETECTOR_SIZE=512` is the balanced CPU default for an enrolled face near the camera; it reduces detector work substantially compared with 640 px. Use `640` only when tests show that the deployment needs to detect smaller or more distant faces.
 - `FACEOPS_MAX_CONCURRENT_INFERENCES=1` is the safe CPU default. It prevents several public requests from competing for the same InsightFace runtime and making every camera stream slow. Increase it only after measuring the server's CPU/GPU under real load.
 - `FACEOPS_CALIBRATION_MAX_PAIRS=20000` bounds the work of the administrator-only threshold diagnostic. The normal recognition path uses one NumPy matrix multiplication for all compatible stored samples instead of a Python loop per sample.
 
@@ -111,19 +110,18 @@ The included SQLite database and local Docker volumes are intentionally simple a
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/profiles` | Registers one consented live camera face in the shared server directory. It requires `name`, `consent=true`, `mode=liveness`, one current camera frame, and the challenge baseline frame. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
-| `POST /api/recognitions` | Compares one verified live camera face with the shared server directory. |
-| `POST /api/tracking` | Returns transient InsightFace face-box coordinates for the live camera overlay; it neither identifies a person nor persists images or embeddings. |
+| `POST /api/profiles` | Registers one consented camera face in the shared server directory. It requires `name`, `consent=true`, and `mode=pad`; it stores a sample only when the PAD decision is `live`. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
+| `POST /api/recognitions` | Evaluates every detected face with PAD in one batch, and matches only `live` faces with the shared server directory. |
+| `POST /api/tracking` | Legacy transient InsightFace box endpoint; the public recognition UI uses `/api/recognitions` so its boxes and PAD decisions stay synchronized. |
 | `GET /api/profiles` | Lists shared profile metadata for an administrator only. Requires `X-Admin-Token`. |
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and full embedding vectors for an administrator only. Requires `X-Admin-Token`; it reports source images as unavailable because they are not persisted. |
 | `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |
 | `DELETE /api/profiles/{profile_id}` | Deletes one shared profile for an administrator only. Requires `X-Admin-Token`. |
-| `POST /api/liveness/challenge` | Creates a one-time 90-second active-liveness challenge for one camera face. |
 | `GET /api/calibration` | Calculates a non-destructive threshold diagnostic from stored samples for an administrator only. Requires `X-Admin-Token`. |
 | `DELETE /api/profiles/{profile_id}/samples/{sample_id}` | Deletes one poor enrollment sample for an administrator only; the final sample is protected. Requires `X-Admin-Token`. |
 | `POST /api/workspaces`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 
-Camera-frame requests are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid frames, no-face frames, and liveness requests with more than one face.
+Camera-frame requests are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid frames, no-face frames, and registration frames containing more than one face. Recognition accepts multiple faces.
 
 Successful `POST /api/profiles` and `POST /api/recognitions` responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
 
@@ -137,4 +135,4 @@ docker compose run --rm faceops python -m py_compile server/*.py
 docker compose run --rm faceops python -m unittest discover -s tests
 ```
 
-The tests cover the shared-directory boundary, legacy workspace handling, one-time liveness challenge use, and pose-change threshold logic. They deliberately do not upload or fabricate biometric images. Verify a real registration and recognition flow manually with a consented face and a camera after deployment.
+The tests cover the shared-directory boundary, configuration, PAD crop/result handling, and legacy workspace compatibility. They deliberately do not upload or fabricate biometric images. Verify a real registration and multi-person recognition flow manually with consented faces and a camera after deployment.

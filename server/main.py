@@ -26,13 +26,23 @@ from .face_service import (
     InsightFaceService,
     validate_enrollment_quality,
 )
-from .liveness import verify_pose_challenge
+from .pad_service import PresentationAttackService, PresentationResult
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 settings = Settings.from_environment()
 database = Database(settings.database_path, settings.retention_days, settings.signing_secret)
-face_service = InsightFaceService(settings.model_root, settings.insightface_model)
+face_service = InsightFaceService(
+    settings.model_root,
+    settings.insightface_model,
+    settings.detector_size,
+)
+pad_service = PresentationAttackService(
+    settings.pad_model_path,
+    settings.pad_model_url,
+    settings.pad_model_sha256,
+    settings.pad_live_threshold,
+)
 # CPU inference is intentionally serialized by default so one slow client cannot
 # make every live camera stream unresponsive. Raise this only after benchmarking.
 inference_semaphore = asyncio.Semaphore(settings.max_concurrent_inferences)
@@ -129,21 +139,21 @@ def trace_step(component: str, message: str, duration_ms: int | None = None) -> 
     return step
 
 
-async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]]]:
-    observations, steps, _ = await analyze_faces(upload)
+async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]], bytes]:
+    observations, steps, _, image_bytes = await analyze_faces(upload)
     if len(observations) != 1:
         api_error(
             422,
             "multiple_faces",
             "Đăng ký chỉ nhận một khuôn mặt trong khung hình để tránh lưu nhầm dữ liệu.",
         )
-    return observations[0], steps
+    return observations[0], steps, image_bytes
 
 
 async def analyze_faces(
     upload: UploadFile,
     require_face: bool = True,
-) -> tuple[list[FaceObservation], list[dict[str, object]], FaceAnalysisTrace]:
+) -> tuple[list[FaceObservation], list[dict[str, object]], FaceAnalysisTrace, bytes]:
     read_started = time.perf_counter()
     image_bytes = await read_upload(upload, settings.max_upload_bytes)
     read_ms = round((time.perf_counter() - read_started) * 1000)
@@ -177,37 +187,33 @@ async def analyze_faces(
             f"Đã phát hiện {analysis_trace.face_count} khuôn mặt và tạo embedding.",
             analysis_trace.inference_ms,
         ),
-    ], analysis_trace
+    ], analysis_trace, image_bytes
 
 
-async def check_liveness(
-    workspace: Workspace,
-    mode: str,
-    challenge_id: str | None,
-    baseline_image: UploadFile | None,
-    action_observation: FaceObservation,
-) -> dict[str, object]:
-    if mode != "liveness":
-        api_error(422, "liveness_required", "Chỉ chấp nhận khung hình camera đã xác thực người thật.")
-    if not challenge_id or baseline_image is None:
-        api_error(422, "liveness_challenge_required", "Cần xác thực người thật bằng camera trước khi tiếp tục.")
+async def analyze_presentation(
+    image_bytes: bytes,
+    observations: list[FaceObservation],
+) -> tuple[list[PresentationResult], dict[str, object]]:
+    """Run one batched PAD inference, then fail closed if it cannot complete."""
 
-    baseline_observation, _ = await analyze_image(baseline_image)
-    if not database.consume_challenge(workspace.id, challenge_id):
-        api_error(422, "liveness_challenge_expired", "Challenge đã hết hạn hoặc đã được dùng. Hãy bắt đầu lại.")
     try:
-        result = verify_pose_challenge(
-            baseline_observation,
-            action_observation,
-            settings.pose_delta_threshold,
-        )
+        async with inference_semaphore:
+            inference_started = time.perf_counter()
+            results = await run_in_threadpool(pad_service.classify_many, image_bytes, observations)
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
-    return {
-        "status": result.status,
-        "method": result.method,
-        "pose_delta": result.pose_delta,
-    }
+    except Exception:
+        logger.exception("PAD inference failed")
+        api_error(
+            503,
+            "presentation_check_unavailable",
+            "Không thể xác thực người thật lúc này. Hãy thử lại sau.",
+        )
+    return results, trace_step(
+        "PAD",
+        f"Đã kiểm tra chống giả mạo cho {len(observations)} khuôn mặt trong cùng một khung hình.",
+        round((time.perf_counter() - inference_started) * 1000),
+    )
 
 
 def profile_payload(profile: StoredProfile, sample_count: int | None = None) -> dict[str, object]:
@@ -266,10 +272,17 @@ def quality_payload(observation: FaceObservation) -> dict[str, object] | None:
     }
 
 
+def presentation_payload(result: PresentationResult) -> dict[str, object]:
+    """Return the decision only, not the raw attack-model scores or face crop."""
+
+    return {"status": result.status, "attack_type": result.attack_type}
+
+
 @app.on_event("startup")
 async def startup() -> None:
     settings.validate_for_startup()
     database.initialize()
+    await run_in_threadpool(pad_service.warmup)
 
 
 @app.get("/api/health")
@@ -277,7 +290,8 @@ async def health() -> dict[str, object]:
     return {
         "status": "ok",
         "face_engine_loaded": face_service.loaded,
-        "liveness_mode": "two_frame_pose_challenge",
+        "presentation_attack_detection": "passive_per_face_pad",
+        "pad_model_loaded": pad_service.loaded,
     }
 
 
@@ -291,18 +305,6 @@ async def create_workspace(payload: WorkspaceRequest) -> dict[str, object]:
         "workspace_token": token,
         "expires_at": as_iso(workspace.expires_at),
         "retention_days": settings.retention_days,
-    }
-
-
-@app.post("/api/liveness/challenge")
-async def create_liveness_challenge(
-) -> dict[str, object]:
-    workspace = database.public_workspace()
-    challenge = database.create_challenge(workspace.id, settings.challenge_ttl_seconds)
-    return {
-        "challenge_id": challenge.id,
-        "instruction": "Nhìn vào camera và xoay nhẹ đầu.",
-        "expires_at": as_iso(challenge.expires_at),
     }
 
 
@@ -395,8 +397,6 @@ async def register_profile(
     consent: Annotated[bool, Form()],
     mode: Annotated[str, Form()],
     image: Annotated[UploadFile, File()],
-    challenge_id: Annotated[str | None, Form()] = None,
-    baseline_image: Annotated[UploadFile | None, File()] = None,
     enrollment_token: Annotated[str | None, Form()] = None,
 ) -> dict[str, object]:
     request_started = time.perf_counter()
@@ -405,8 +405,10 @@ async def register_profile(
     clean_name = " ".join(name.split())
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
+    if mode != "pad":
+        api_error(422, "presentation_check_required", "Cần kiểm tra người thật bằng camera trước khi đăng ký.")
     workspace = database.public_workspace()
-    observation, processing_steps = await analyze_image(image)
+    observation, processing_steps, image_bytes = await analyze_image(image)
     try:
         quality = validate_enrollment_quality(
             observation,
@@ -419,7 +421,21 @@ async def register_profile(
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
     processing_steps.append(trace_step("Chất lượng", "Ảnh khuôn mặt đạt điều kiện lưu mẫu."))
-    liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
+    presentation_results, presentation_step = await analyze_presentation(image_bytes, [observation])
+    presentation = presentation_results[0]
+    processing_steps.append(presentation_step)
+    if presentation.status == "spoof":
+        api_error(
+            422,
+            "presentation_attack_detected",
+            "Không thể đăng ký từ ảnh, màn hình hoặc video phát lại nghi ngờ. Hãy dùng khuôn mặt thật trước camera.",
+        )
+    if presentation.status != "live":
+        api_error(
+            422,
+            "presentation_uncertain",
+            "Chưa thể xác thực người thật. Hãy nhìn rõ camera ở nơi đủ sáng rồi thử lại.",
+        )
     storage_started = time.perf_counter()
     enrollment = database.enroll_profile_sample(
         workspace.id,
@@ -453,7 +469,7 @@ async def register_profile(
             "enrollment_token": enrollment.enrollment_token,
         },
         "quality": quality_payload(observation),
-        "liveness": liveness,
+        "presentation": presentation_payload(presentation),
         "processing": {
             "steps": processing_steps,
             "total_ms": round((time.perf_counter() - request_started) * 1000),
@@ -465,15 +481,14 @@ async def register_profile(
 async def recognize_face(
     mode: Annotated[str, Form()],
     image: Annotated[UploadFile, File()],
-    challenge_id: Annotated[str | None, Form()] = None,
-    baseline_image: Annotated[UploadFile | None, File()] = None,
 ) -> dict[str, object]:
     request_started = time.perf_counter()
+    if mode != "pad":
+        api_error(422, "presentation_check_required", "Cần kiểm tra người thật bằng camera trước khi nhận diện.")
     workspace = database.public_workspace()
-    observations, processing_steps, analysis_trace = await analyze_faces(image)
-    if len(observations) != 1:
-        api_error(422, "multiple_faces", "Liveness chỉ hỗ trợ một khuôn mặt trong mỗi yêu cầu.")
-    liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observations[0])
+    observations, processing_steps, analysis_trace, image_bytes = await analyze_faces(image)
+    presentation_results, presentation_step = await analyze_presentation(image_bytes, observations)
+    processing_steps.append(presentation_step)
     lookup_started = time.perf_counter()
     profiles = database.profiles_for_workspace(workspace.id, include_embeddings=True)
     processing_steps.append(
@@ -499,7 +514,7 @@ async def recognize_face(
             [profile for profile, _ in samples],
         )
     recognition_faces: list[dict[str, object]] = []
-    for observation in observations:
+    for observation, presentation in zip(observations, presentation_results, strict=True):
         best_profile: StoredProfile | None = None
         best_similarity = -1.0
         index = samples_by_dimension.get(int(observation.embedding.size))
@@ -508,7 +523,21 @@ async def recognize_face(
             best_index = int(np.argmax(embedding_matrix @ observation.embedding))
             best_similarity = float(embedding_matrix[best_index] @ observation.embedding)
             best_profile = sample_profiles[best_index]
-        matched = best_profile is not None and best_similarity >= settings.match_threshold
+        matched = (
+            presentation.status == "live"
+            and best_profile is not None
+            and best_similarity >= settings.match_threshold
+        )
+        if presentation.status == "spoof":
+            reason = "presentation_attack"
+        elif presentation.status != "live":
+            reason = "presentation_uncertain"
+        elif not profiles:
+            reason = "no_profiles"
+        elif not matched:
+            reason = "no_match"
+        else:
+            reason = "matched"
         recognition_faces.append(
             {
                 "box": bounding_box_payload(observation),
@@ -516,6 +545,8 @@ async def recognize_face(
                 "similarity": round(best_similarity, 4) if best_profile is not None else None,
                 "profile": profile_payload(best_profile) if matched and best_profile else None,
                 "quality": quality_payload(observation),
+                "presentation": presentation_payload(presentation),
+                "reason": reason,
             }
         )
 
@@ -535,8 +566,7 @@ async def recognize_face(
         "faces": recognition_faces,
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,
-        "reason": "no_profiles" if not profiles else "no_match",
-        "liveness": liveness,
+        "reason": "matched" if first_match else ("no_profiles" if not profiles else "no_match"),
         "processing": {
             "steps": processing_steps,
             "total_ms": round((time.perf_counter() - request_started) * 1000),
@@ -550,7 +580,7 @@ async def track_faces(
 ) -> dict[str, object]:
     """Return live InsightFace boxes only; tracking frames are never stored."""
 
-    observations, _, analysis_trace = await analyze_faces(image, require_face=False)
+    observations, _, analysis_trace, _ = await analyze_faces(image, require_face=False)
     return {
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,

@@ -39,6 +39,18 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "FACEOPS_ADMIN_TOKEN"):
             settings.validate_for_startup()
 
+    def test_pad_threshold_must_be_between_zero_and_one(self) -> None:
+        settings = replace(Settings.from_environment(), pad_live_threshold=1.0)
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_PAD_LIVE_THRESHOLD"):
+            settings.validate_for_startup()
+
+    def test_pad_model_digest_must_be_sha256(self) -> None:
+        settings = replace(Settings.from_environment(), pad_model_sha256="not-a-digest")
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_PAD_MODEL_SHA256"):
+            settings.validate_for_startup()
+
 
 if __name__ == "__main__":
     unittest.main()

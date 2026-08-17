@@ -97,9 +97,10 @@ def validate_enrollment_quality(
 
 
 class InsightFaceService:
-    def __init__(self, model_root: Path, model_name: str) -> None:
+    def __init__(self, model_root: Path, model_name: str, detector_size: int = 512) -> None:
         self.model_root = model_root
         self.model_name = model_name
+        self.detector_size = detector_size
         self._analyzer = None
         self._load_lock = threading.Lock()
 
@@ -124,7 +125,7 @@ class InsightFaceService:
                     root=str(self.model_root),
                     providers=["CPUExecutionProvider"],
                 )
-                analyzer.prepare(ctx_id=0, det_size=(640, 640))
+                analyzer.prepare(ctx_id=0, det_size=(self.detector_size, self.detector_size))
                 self._analyzer = analyzer
         return self._analyzer
 
