@@ -30,7 +30,7 @@
           </div>
           <form class="action-form" id="registrationForm" novalidate>
             <h2>Đăng ký khuôn mặt</h2>
-            <p class="file-status">Đặt một khuôn mặt thật trước camera. Hệ thống tự kiểm tra ảnh, màn hình và video phát lại trước khi lưu.</p>
+            <p class="file-status">Đặt một khuôn mặt rõ nét trước camera. Hệ thống sẽ lưu embedding InsightFace trên server.</p>
             <label for="personName">Họ và tên</label>
             <input id="personName" type="text" autocomplete="name" placeholder="Nguyen Van A" minlength="2" required />
             <button class="button" id="registerButton" type="submit">Đăng ký khuôn mặt</button>
@@ -48,7 +48,7 @@
           </div>
           <div class="action-form">
             <h2>Nhận diện khuôn mặt</h2>
-            <p class="file-status">Tất cả khuôn mặt trong khung được kiểm tra đồng thời. Chỉ người thật mới có thể nhận kết quả nhận diện.</p>
+            <p class="file-status">Tất cả khuôn mặt trong khung được nhận diện đồng thời bằng InsightFace.</p>
             <p class="result" id="recognitionResult" data-state="idle" aria-live="polite"><strong>Đang chờ khuôn mặt</strong><span>Đặt một hoặc nhiều người vào khung hình để bắt đầu.</span></p>
             <ol class="recognition-faces" id="recognitionFaces" aria-live="polite"></ol>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="recognizeProcessingTrace" aria-live="polite"></ol></details>

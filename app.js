@@ -176,14 +176,6 @@
     if (drawing) drawing.clearRect(0, 0, canvas.width, canvas.height);
   }
 
-  function presentationLabel(presentation) {
-    if (!presentation || presentation.status === "live") return "";
-    if (presentation.status === "uncertain") return "Chưa thể xác thực người thật";
-    return presentation.attack_type === "replay"
-      ? "Cảnh báo: nghi ngờ video phát lại"
-      : "Cảnh báo: nghi ngờ ảnh hoặc màn hình";
-  }
-
   function drawTracking(context, faces, imageWidth, imageHeight, labels = []) {
     const canvas = canvasFor(context);
     const video = videoFor(context);
@@ -213,19 +205,10 @@
       const boxHeight = (Number(box[3]) - Number(box[1])) * scale;
       const label = labels[index];
       const match = label && label.matched && label.profile;
-      const presentation = label && label.presentation ? label.presentation.status : null;
-      drawing.strokeStyle = presentation === "spoof"
-        ? colorToken("--color-error")
-        : presentation === "uncertain"
-          ? colorToken("--color-accent")
-          : match ? colorToken("--color-success") : colorToken("--color-accent");
+      drawing.strokeStyle = match ? colorToken("--color-success") : colorToken("--color-accent");
       drawing.fillStyle = drawing.strokeStyle;
       drawing.strokeRect(x, y, boxWidth, boxHeight);
-      const text = presentation === "spoof"
-        ? (label.presentation.attack_type === "replay" ? "Nghi ngờ video" : "Nghi ngờ ảnh/màn hình")
-        : presentation === "uncertain"
-          ? "Chưa xác thực"
-          : match ? labels[index].profile.name : "Khuôn mặt " + (index + 1);
+      const text = match ? labels[index].profile.name : "Khuôn mặt " + (index + 1);
       drawing.fillText(text, x + 4, Math.max(14, y - 6));
     });
   }
@@ -462,11 +445,8 @@
     elements.recognitionFaces.replaceChildren();
     faces.forEach((face, index) => {
       const item = document.createElement("li");
-      const presentation = face.presentation && face.presentation.status;
-      item.dataset.state = presentation === "spoof" ? "error" : face.matched ? "match" : face.pending ? "pending" : "empty";
-      const label = presentation && presentation !== "live"
-        ? presentationLabel(face.presentation)
-        : face.matched && face.profile
+      item.dataset.state = face.matched ? "match" : face.pending ? "pending" : "empty";
+      const label = face.matched && face.profile
         ? face.profile.name
         : face.pending && face.profile
           ? "Đang xác nhận: " + face.profile.name + " (" + face.confirmationCount + "/" + REQUIRED_RECOGNITION_CONFIRMATIONS + ")"
@@ -491,14 +471,13 @@
     }
     if (!(await startCamera("register"))) return;
     try {
-      setMessage(elements.registrationMessage, "Đang kiểm tra người thật và lưu mẫu...", "");
+      setMessage(elements.registrationMessage, "Đang xử lý và lưu mẫu khuôn mặt...", "");
       setButtonState(elements.registerButton, "loading", "Đang đăng ký...");
       // Enrollment is infrequent, so retain more pixels for the quality gate.
       const image = await captureFrame("register", "registration.jpg", 640);
       const form = new FormData();
       form.append("name", name);
       form.append("consent", "true");
-      form.append("mode", "pad");
       form.append("image", image, image.name);
       const enrollmentToken = state.enrollmentTokens.get(enrollmentKey(name));
       if (enrollmentToken) form.append("enrollment_token", enrollmentToken);
@@ -516,22 +495,17 @@
         "success",
       );
       setButtonState(elements.registerButton, "success", "Đã đăng ký");
-      setCameraStatus("register", "Đã xác thực người thật và lưu mẫu.", "success");
+      setCameraStatus("register", "Đã lưu mẫu khuôn mặt.", "success");
     } catch (error) {
-      const message = error instanceof ApiError && error.code === "presentation_attack_detected"
-        ? "Phát hiện ảnh, màn hình hoặc video phát lại nghi ngờ. Hãy dùng khuôn mặt thật trước camera."
-        : error instanceof ApiError && error.code === "presentation_uncertain"
-          ? "Chưa thể xác thực người thật. Hãy nhìn rõ camera ở nơi đủ sáng rồi thử lại."
-          : errorMessage(error);
+      const message = errorMessage(error);
       setMessage(elements.registrationMessage, message, "error");
       setButtonState(elements.registerButton, "error", "Thử lại");
       setCameraStatus("register", message, "error");
     }
   }
 
-  async function requestRecognition(image, options = {}) {
+  async function requestRecognition(image) {
     const form = new FormData();
-    form.append("mode", options.mode || "pad");
     form.append("image", image, image.name);
     return apiFetch("/api/recognitions", { method: "POST", body: form });
   }
@@ -553,13 +527,7 @@
     if (drawCamera && state.cameraContext === "recognize") {
       drawTracking("recognize", faces, payload.image_width, payload.image_height, faces);
     }
-    const spoofCount = faces.filter((face) => face.presentation && face.presentation.status === "spoof").length;
-    const uncertainCount = faces.filter((face) => face.presentation && face.presentation.status === "uncertain").length;
-    if (spoofCount) {
-      setRecognition("error", "Đã chặn khuôn mặt nghi ngờ giả mạo", spoofCount + " khuôn mặt không được trả về dữ liệu.");
-    } else if (uncertainCount) {
-      setRecognition("idle", "Chưa thể xác thực người thật", uncertainCount + " khuôn mặt cần nhìn rõ camera hơn.");
-    } else if (matchedCount) {
+    if (matchedCount) {
       setRecognition("match", "Đã tìm thấy dữ liệu", "Khớp " + matchedCount + " khuôn mặt.");
     } else if (pendingCount) {
       setRecognition("idle", "Đang xác nhận", "Đã thấy " + pendingCount + " khuôn mặt; kiểm tra thêm một khung hình.");
