@@ -407,14 +407,17 @@ async def register_profile(
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     workspace = database.public_workspace()
     observation, processing_steps = await analyze_image(image)
-    quality = validate_enrollment_quality(
-        observation,
-        min_face_size=settings.min_face_size,
-        min_detection_score=settings.min_detection_score,
-        min_sharpness=settings.min_face_sharpness,
-        min_brightness=settings.min_face_brightness,
-        max_brightness=settings.max_face_brightness,
-    )
+    try:
+        quality = validate_enrollment_quality(
+            observation,
+            min_face_size=settings.min_face_size,
+            min_detection_score=settings.min_detection_score,
+            min_sharpness=settings.min_face_sharpness,
+            min_brightness=settings.min_face_brightness,
+            max_brightness=settings.max_face_brightness,
+        )
+    except FaceAnalysisError as error:
+        api_error(422, error.code, error.message)
     processing_steps.append(trace_step("Chất lượng", "Ảnh khuôn mặt đạt điều kiện lưu mẫu."))
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observation)
     storage_started = time.perf_counter()
