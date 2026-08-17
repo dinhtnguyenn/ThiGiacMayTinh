@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 import time
 from datetime import datetime, timezone
@@ -12,7 +13,7 @@ from typing import Annotated
 import numpy as np
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, Response, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from .calibration import threshold_report
@@ -25,7 +26,7 @@ from .face_service import (
     InsightFaceService,
     validate_enrollment_quality,
 )
-from .liveness import pose_offset, verify_pose_challenge
+from .liveness import verify_pose_challenge
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -35,6 +36,7 @@ face_service = InsightFaceService(settings.model_root, settings.insightface_mode
 # CPU inference is intentionally serialized by default so one slow client cannot
 # make every live camera stream unresponsive. Raise this only after benchmarking.
 inference_semaphore = asyncio.Semaphore(settings.max_concurrent_inferences)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="FaceOps API",
@@ -42,6 +44,24 @@ app = FastAPI(
     docs_url="/api/docs",
     redoc_url=None,
 )
+
+
+@app.exception_handler(Exception)
+async def handle_unexpected_error(request: Request, error: Exception) -> JSONResponse:
+    """Keep unexpected API failures structured without exposing biometric data."""
+
+    request_id = secrets.token_urlsafe(8)
+    logger.exception("Unexpected FaceOps error %s on %s %s", request_id, request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_server_error",
+                "message": f"Server gặp lỗi tạm thời. Mã kiểm tra: {request_id}.",
+            }
+        },
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @app.middleware("http")
@@ -282,7 +302,6 @@ async def create_liveness_challenge(
     return {
         "challenge_id": challenge.id,
         "instruction": "Nhìn vào camera và xoay nhẹ đầu.",
-        "minimum_pose_delta": settings.pose_delta_threshold,
         "expires_at": as_iso(challenge.expires_at),
     }
 
@@ -529,17 +548,10 @@ async def track_faces(
     """Return live InsightFace boxes only; tracking frames are never stored."""
 
     observations, _, analysis_trace = await analyze_faces(image, require_face=False)
-    faces = []
-    for observation in observations:
-        try:
-            pose = round(pose_offset(observation.keypoints), 4)
-        except FaceAnalysisError:
-            pose = None
-        faces.append({"box": bounding_box_payload(observation), "pose_offset": pose})
     return {
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,
-        "faces": faces,
+        "faces": [{"box": bounding_box_payload(observation)} for observation in observations],
     }
 
 
