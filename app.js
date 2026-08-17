@@ -493,7 +493,8 @@
     try {
       setMessage(elements.registrationMessage, "Đang kiểm tra người thật và lưu mẫu...", "");
       setButtonState(elements.registerButton, "loading", "Đang đăng ký...");
-      const image = await captureFrame("register", "registration.jpg", 512);
+      // Enrollment is infrequent, so retain more pixels for the quality gate.
+      const image = await captureFrame("register", "registration.jpg", 640);
       const form = new FormData();
       form.append("name", name);
       form.append("consent", "true");

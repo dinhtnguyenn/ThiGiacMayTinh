@@ -71,7 +71,7 @@ class Settings:
             pose_delta_threshold=float(os.getenv("FACEOPS_POSE_DELTA_THRESHOLD", "0.035")),
             max_upload_bytes=int(os.getenv("FACEOPS_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
             max_samples_per_profile=int(os.getenv("FACEOPS_MAX_SAMPLES_PER_PROFILE", "5")),
-            min_face_size=int(os.getenv("FACEOPS_MIN_FACE_SIZE", "120")),
+            min_face_size=int(os.getenv("FACEOPS_MIN_FACE_SIZE", "96")),
             min_detection_score=float(os.getenv("FACEOPS_MIN_DETECTION_SCORE", "0.65")),
             min_face_sharpness=float(os.getenv("FACEOPS_MIN_FACE_SHARPNESS", "35")),
             min_face_brightness=float(os.getenv("FACEOPS_MIN_FACE_BRIGHTNESS", "45")),
