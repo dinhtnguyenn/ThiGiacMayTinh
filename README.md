@@ -6,19 +6,19 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 | Feature | Behavior |
 | --- | --- |
-| Face registration | The user enters a name, opens the webcam, and saves a quality-checked InsightFace embedding on the server. The same active browser session can add further captures to that identity. |
-| Face recognition | Any device using the same deployed website can identify a face registered on the server. The app shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
+| Face registration | The user enters a name and the website automatically verifies a live camera subject before saving a quality-checked InsightFace embedding on the server. The same active browser session can add further captures to that identity. |
+| Face recognition | The website automatically verifies one live camera subject before comparing it to the shared directory. It shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
 | Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
 ## User interface
 
 The website has three modules:
 
-1. **Đăng ký** — the page asks for camera permission when it opens. Enter a name and select **Đăng ký khuôn mặt**; the app opens the camera automatically if no image was selected. A success message remains on this tab. Registration accepts exactly one face to avoid assigning a name to the wrong person. It rejects faces that are too small, blurry, badly exposed, or uncertain before persisting an embedding.
-2. **Nhận diện** — the camera opens automatically when this tab is selected and sends frames for recognition continuously. Selecting one uploaded image runs one recognition immediately. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result. Live camera matches must agree for two consecutive server results before the UI shows a stored name. The optional active-liveness flow captures a baseline frame, then requires one person to turn their head before it recognizes the action frame.
+1. **Đăng ký** — enter a name and choose `Đăng ký khuôn mặt`. The camera captures the necessary frames automatically and saves a sample only after live verification succeeds. There is no image-upload control.
+2. **Nhận diện** — opening this tab opens the camera and begins live verification automatically. Face boxes can track multiple people, but the system verifies and identifies one person at a time so it never labels an unverified person as live. If a photo, screen, or unchanged replay fails the challenge, the UI shows a warning instead of a name.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, inspect each profile's stored samples and complete float32 embedding vectors, rename a profile, or delete one. It also states explicitly that source images are not stored. The token is kept only in the tab's memory and is never written to browser storage.
 
-The simple UI sends either a fresh webcam frame or one selected image in static-image mode. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browser-side registration tracking avoids redundant server requests; recognition frames are resized to a 640 px maximum before upload. Browsers without this API fall back to the server-provided boxes. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
+The UI sends only freshly captured webcam frames. The public registration and recognition APIs require a one-time liveness challenge; a request in static-image mode is rejected. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browser-side registration tracking avoids redundant server requests; frames are resized to a 640 px maximum before they are sent for processing. Browsers without this API fall back to transient server tracking. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
 
 ### Better enrollment and matching
 
@@ -46,7 +46,7 @@ The server supports a controlled active-liveness challenge. Observe the limitati
 
 ### Important liveness limitation
 
-The included liveness check is a real **two-frame head-pose challenge**: capture a baseline webcam frame, turn the head slightly left or right, then submit a second webcam frame. It generally rejects a single unchanged photo in the normal web flow.
+The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, asks the subject to turn their head slightly, then captures the second frame automatically. It generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
 
 It is **not** a certified presentation-attack-detection (PAD) or anti-spoofing system. A replayed video or a sophisticated attacker can still defeat it. Do not use this challenge alone for payment, identity proofing, access control, law-enforcement, or any high-risk decision. For those uses, integrate and calibrate a dedicated PAD model, hardware-backed capture controls, rate limits, audit trails, and a human-review path.
 
@@ -111,9 +111,9 @@ The included SQLite database and local Docker volumes are intentionally simple a
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/profiles` | Registers one consented face in the shared server directory. Requires `name`, `consent=true`, `mode`, `image`, and liveness fields when applicable. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
-| `POST /api/recognitions` | Compares every detected face in one submitted image with the shared server directory. |
-| `POST /api/tracking` | Returns transient InsightFace face-box coordinates for the live camera overlay; it does not persist images or embeddings. |
+| `POST /api/profiles` | Registers one consented live camera face in the shared server directory. It requires `name`, `consent=true`, `mode=liveness`, one current camera frame, and the challenge baseline frame. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
+| `POST /api/recognitions` | Compares one verified live camera face with the shared server directory. |
+| `POST /api/tracking` | Returns transient InsightFace face-box coordinates for the live camera overlay; it neither identifies a person nor persists images or embeddings. |
 | `GET /api/profiles` | Lists shared profile metadata for an administrator only. Requires `X-Admin-Token`. |
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and full embedding vectors for an administrator only. Requires `X-Admin-Token`; it reports source images as unavailable because they are not persisted. |
 | `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |
@@ -123,7 +123,7 @@ The included SQLite database and local Docker volumes are intentionally simple a
 | `DELETE /api/profiles/{profile_id}/samples/{sample_id}` | Deletes one poor enrollment sample for an administrator only; the final sample is protected. Requires `X-Admin-Token`. |
 | `POST /api/workspaces`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 
-Image uploads are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid files, no-face images, and images with more than one face.
+Camera-frame requests are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid frames, no-face frames, and liveness requests with more than one face.
 
 Successful `POST /api/profiles` and `POST /api/recognitions` responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
 

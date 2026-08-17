@@ -167,12 +167,10 @@ async def check_liveness(
     baseline_image: UploadFile | None,
     action_observation: FaceObservation,
 ) -> dict[str, object]:
-    if mode == "image":
-        return {"status": "not_checked", "method": "static_image"}
     if mode != "liveness":
-        api_error(422, "invalid_mode", "mode phải là image hoặc liveness.")
+        api_error(422, "liveness_required", "Chỉ chấp nhận khung hình camera đã xác thực người thật.")
     if not challenge_id or baseline_image is None:
-        api_error(422, "liveness_challenge_required", "Hoàn thành liveness challenge trước khi gửi ảnh webcam.")
+        api_error(422, "liveness_challenge_required", "Cần xác thực người thật bằng camera trước khi tiếp tục.")
 
     baseline_observation, _ = await analyze_image(baseline_image)
     if not database.consume_challenge(workspace.id, challenge_id):
@@ -283,7 +281,7 @@ async def create_liveness_challenge(
     challenge = database.create_challenge(workspace.id, settings.challenge_ttl_seconds)
     return {
         "challenge_id": challenge.id,
-        "instruction": "Giữ đầu thẳng trong khung hình, sau đó xoay nhẹ đầu sang trái hoặc phải và xác nhận.",
+        "instruction": "Nhìn vào camera và xoay nhẹ đầu.",
         "expires_at": as_iso(challenge.expires_at),
     }
 
@@ -450,7 +448,7 @@ async def recognize_face(
     request_started = time.perf_counter()
     workspace = database.public_workspace()
     observations, processing_steps, analysis_trace = await analyze_faces(image)
-    if mode != "image" and len(observations) != 1:
+    if len(observations) != 1:
         api_error(422, "multiple_faces", "Liveness chỉ hỗ trợ một khuôn mặt trong mỗi yêu cầu.")
     liveness = await check_liveness(workspace, mode, challenge_id, baseline_image, observations[0])
     lookup_started = time.perf_counter()

@@ -30,11 +30,9 @@
           </div>
           <form class="action-form" id="registrationForm" novalidate>
             <h2>Đăng ký khuôn mặt</h2>
+            <p class="file-status">Dùng camera để xác thực người thật rồi lưu mẫu khuôn mặt. Hãy nhìn camera và xoay nhẹ đầu khi được yêu cầu.</p>
             <label for="personName">Họ và tên</label>
             <input id="personName" type="text" autocomplete="name" placeholder="Nguyen Van A" minlength="2" required />
-            <input class="file-input" id="registerImageInput" type="file" accept="image/*" />
-            <label class="upload-button" for="registerImageInput">Chọn ảnh từ máy</label>
-            <p class="file-status" id="registerImageStatus">Hoặc dùng camera đang mở. Đăng ký lại cùng tên trong phiên này để thêm mẫu.</p>
             <button class="button" id="registerButton" type="submit">Đăng ký khuôn mặt</button>
             <p class="message" id="registrationMessage" role="status" aria-live="polite"></p>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="registerProcessingTrace" aria-live="polite"></ol></details>
@@ -50,12 +48,9 @@
           </div>
           <div class="action-form">
             <h2>Nhận diện khuôn mặt</h2>
-            <p class="result" id="recognitionResult" data-state="idle" aria-live="polite"><strong>Chưa có kết quả</strong><span>Đặt một hoặc nhiều khuôn mặt vào khung hình.</span></p>
+            <p class="file-status">Camera tự xác thực người thật trước khi hiển thị dữ liệu. Mỗi lần chỉ xác thực một người.</p>
+            <p class="result" id="recognitionResult" data-state="idle" aria-live="polite"><strong>Đang chờ khuôn mặt</strong><span>Đặt một người vào khung hình để bắt đầu.</span></p>
             <ol class="recognition-faces" id="recognitionFaces" aria-live="polite"></ol>
-            <details class="processing" id="livenessPanel"><summary>Xác thực người thật</summary><p id="livenessStatus">Dùng camera, giữ đầu thẳng rồi xoay nhẹ theo hướng dẫn. Chỉ hỗ trợ một người trong khung hình.</p><div class="liveness-actions"><button class="text-button" id="startLivenessButton" type="button">Bắt đầu xác thực</button><button class="text-button" id="completeLivenessButton" type="button" hidden>Đã xoay đầu</button></div></details>
-            <input class="file-input" id="recognizeImageInput" type="file" accept="image/*" />
-            <label class="upload-button" for="recognizeImageInput">Chọn ảnh từ máy</label>
-            <p class="file-status" id="recognizeImageStatus">Camera đang nhận diện liên tục.</p>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="recognizeProcessingTrace" aria-live="polite"></ol></details>
           </div>
         </section>
