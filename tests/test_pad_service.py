@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from server.face_service import FaceObservation
 from server.pad_service import PresentationAttackService
 
 
@@ -41,6 +42,18 @@ class PresentationAttackServiceTests(unittest.TestCase):
 
         self.assertEqual(result.status, "uncertain")
         self.assertIsNone(result.attack_type)
+
+    def test_crop_box_matches_the_upstream_aspect_preserving_algorithm(self) -> None:
+        observation = FaceObservation(
+            embedding=np.zeros(512, dtype=np.float32),
+            keypoints=np.zeros((5, 2), dtype=np.float32),
+            bbox=np.array([220, 120, 320, 320], dtype=np.float32),
+        )
+
+        crop_box = self.service._expanded_crop_box(640, 480, observation)
+
+        # The 100x200 box stays 1:2 after expansion and is shifted into frame.
+        self.assertEqual(crop_box, (150, 0, 389, 479))
 
 
 if __name__ == "__main__":

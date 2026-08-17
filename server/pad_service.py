@@ -102,27 +102,63 @@ class PresentationAttackService:
 
     @staticmethod
     def _prepare_crop(image: np.ndarray, observation: FaceObservation) -> np.ndarray:
+        left, top, right, bottom = PresentationAttackService._expanded_crop_box(
+            image.shape[1], image.shape[0], observation
+        )
+        try:
+            import cv2
+        except ImportError as error:
+            raise RuntimeError("OpenCV is required for PAD inference.") from error
+        crop = cv2.resize(image[top : bottom + 1, left : right + 1], (80, 80), interpolation=cv2.INTER_LINEAR)
+        return np.transpose(crop.astype(np.float32) / 255.0, (2, 0, 1))
+
+    @staticmethod
+    def _expanded_crop_box(
+        image_width: int,
+        image_height: int,
+        observation: FaceObservation,
+    ) -> tuple[int, int, int, int]:
+        """Match Silent-Face-Anti-Spoofing's 2.7x, aspect-preserving crop."""
+
         if observation.bbox is None or observation.bbox.shape != (4,):
+            raise FaceAnalysisError("pad_crop_unavailable", "Không thể tạo vùng kiểm tra chống giả mạo.")
+        if image_width < 2 or image_height < 2:
             raise FaceAnalysisError("pad_crop_unavailable", "Không thể tạo vùng kiểm tra chống giả mạo.")
         x1, y1, x2, y2 = (float(value) for value in observation.bbox)
         width = max(1.0, x2 - x1)
         height = max(1.0, y2 - y1)
         center_x = (x1 + x2) / 2
         center_y = (y1 + y2) / 2
-        # MiniFASNet-V2 was trained with a 2.7x detection-box crop margin.
-        side = max(width, height) * 2.7
-        left = max(0, int(round(center_x - side / 2)))
-        top = max(0, int(round(center_y - side / 2)))
-        right = min(image.shape[1], int(round(center_x + side / 2)))
-        bottom = min(image.shape[0], int(round(center_y + side / 2)))
+
+        # This deliberately preserves the original box ratio. The upstream
+        # 2.7_80x80 model was trained with this exact edge-shifting behavior.
+        scale = min(
+            2.7,
+            (image_width - 1) / width,
+            (image_height - 1) / height,
+        )
+        expanded_width = width * scale
+        expanded_height = height * scale
+        left = center_x - expanded_width / 2
+        top = center_y - expanded_height / 2
+        right = center_x + expanded_width / 2
+        bottom = center_y + expanded_height / 2
+        if left < 0:
+            right -= left
+            left = 0
+        if top < 0:
+            bottom -= top
+            top = 0
+        if right > image_width - 1:
+            left -= right - image_width + 1
+            right = image_width - 1
+        if bottom > image_height - 1:
+            top -= bottom - image_height + 1
+            bottom = image_height - 1
+        left, top, right, bottom = int(left), int(top), int(right), int(bottom)
         if right <= left or bottom <= top:
             raise FaceAnalysisError("pad_crop_unavailable", "Không thể tạo vùng kiểm tra chống giả mạo.")
-        try:
-            import cv2
-        except ImportError as error:
-            raise RuntimeError("OpenCV is required for PAD inference.") from error
-        crop = cv2.resize(image[top:bottom, left:right], (80, 80), interpolation=cv2.INTER_LINEAR)
-        return np.transpose(crop.astype(np.float32) / 255.0, (2, 0, 1))
+        return left, top, right, bottom
 
     def _predict(self, batch: np.ndarray) -> np.ndarray:
         session = self._get_session()
