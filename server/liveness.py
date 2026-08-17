@@ -16,7 +16,9 @@ class LivenessResult:
     pose_delta: float
 
 
-def _nose_offset(keypoints: np.ndarray) -> float:
+def pose_offset(keypoints: np.ndarray) -> float:
+    """Return a scale-independent horizontal head-pose signal from landmarks."""
+
     left_eye, right_eye, nose = keypoints[:3]
     eye_center_x = (float(left_eye[0]) + float(right_eye[0])) / 2
     eye_distance = abs(float(right_eye[0]) - float(left_eye[0]))
@@ -28,12 +30,12 @@ def _nose_offset(keypoints: np.ndarray) -> float:
 def verify_pose_challenge(
     baseline: FaceObservation,
     challenge: FaceObservation,
-    min_pose_delta: float = 0.06,
+    min_pose_delta: float = 0.045,
 ) -> LivenessResult:
     """Require a measurable face-pose change between two freshly captured frames."""
 
-    baseline_offset = _nose_offset(baseline.keypoints)
-    challenge_offset = _nose_offset(challenge.keypoints)
+    baseline_offset = pose_offset(baseline.keypoints)
+    challenge_offset = pose_offset(challenge.keypoints)
     pose_delta = abs(challenge_offset - baseline_offset)
     if pose_delta < min_pose_delta:
         raise FaceAnalysisError(

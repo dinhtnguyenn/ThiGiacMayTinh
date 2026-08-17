@@ -25,7 +25,7 @@ from .face_service import (
     InsightFaceService,
     validate_enrollment_quality,
 )
-from .liveness import verify_pose_challenge
+from .liveness import pose_offset, verify_pose_challenge
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -282,6 +282,7 @@ async def create_liveness_challenge(
     return {
         "challenge_id": challenge.id,
         "instruction": "Nhìn vào camera và xoay nhẹ đầu.",
+        "minimum_pose_delta": settings.pose_delta_threshold,
         "expires_at": as_iso(challenge.expires_at),
     }
 
@@ -528,10 +529,17 @@ async def track_faces(
     """Return live InsightFace boxes only; tracking frames are never stored."""
 
     observations, _, analysis_trace = await analyze_faces(image, require_face=False)
+    faces = []
+    for observation in observations:
+        try:
+            pose = round(pose_offset(observation.keypoints), 4)
+        except FaceAnalysisError:
+            pose = None
+        faces.append({"box": bounding_box_payload(observation), "pose_offset": pose})
     return {
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,
-        "faces": [{"box": bounding_box_payload(observation)} for observation in observations],
+        "faces": faces,
     }
 
 

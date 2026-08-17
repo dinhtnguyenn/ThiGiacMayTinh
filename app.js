@@ -494,7 +494,7 @@
   }
 
   function livenessFailureMessage(error) {
-    if (error instanceof ApiError && ["liveness_challenge_failed", "multiple_faces", "face_not_found"].includes(error.code)) {
+    if (error instanceof ApiError && ["liveness_challenge_failed", "liveness_landmarks", "multiple_faces", "face_not_found"].includes(error.code)) {
       return "Không thể xác thực người thật. Không dùng ảnh, màn hình hoặc video; hãy nhìn camera và xoay nhẹ đầu rồi thử lại.";
     }
     return errorMessage(error);
@@ -502,6 +502,36 @@
 
   function pause(milliseconds) {
     return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  }
+
+  async function captureLivenessCandidate(context, filename) {
+    const image = await captureFrame(context, filename, 640);
+    const form = new FormData();
+    form.append("image", image, image.name);
+    const tracking = await apiFetch("/api/tracking", { method: "POST", body: form });
+    const faces = Array.isArray(tracking.faces) ? tracking.faces : [];
+    if (faces.length !== 1) {
+      throw new ApiError("Cần đúng một khuôn mặt để xác thực người thật.", "multiple_faces", 422);
+    }
+    if (typeof faces[0].pose_offset !== "number" || !Number.isFinite(faces[0].pose_offset)) {
+      throw new ApiError("Không thể đọc chuyển động khuôn mặt.", "liveness_landmarks", 422);
+    }
+    return { image, pose: faces[0].pose_offset };
+  }
+
+  async function waitForPoseChange(context, session, baselinePose, minimumPoseDelta) {
+    const deadline = Date.now() + 9000;
+    while (Date.now() < deadline) {
+      await pause(700);
+      if (session.cancelled || state.livenessSession !== session) return null;
+      const candidate = await captureLivenessCandidate(context, "liveness-action.jpg");
+      if (Math.abs(candidate.pose - baselinePose) >= minimumPoseDelta) return candidate.image;
+    }
+    throw new ApiError(
+      "Không thấy thay đổi chuyển động đủ rõ.",
+      "liveness_challenge_failed",
+      422,
+    );
   }
 
   async function beginAutomaticLiveness(context, registration = null) {
@@ -520,13 +550,12 @@
       }
       setCameraStatus(context, "Đang xác thực người thật. Hãy xoay nhẹ đầu.");
       const challenge = await apiFetch("/api/liveness/challenge", { method: "POST" });
-      const baselineImage = await captureFrame(context, "liveness-baseline.jpg", 640);
+      const baseline = await captureLivenessCandidate(context, "liveness-baseline.jpg");
       if (session.cancelled || state.livenessSession !== session) return;
       session.challengeId = challenge.challenge_id;
-      session.baselineImage = baselineImage;
-      await pause(1400);
-      if (session.cancelled || state.livenessSession !== session) return;
-      const actionImage = await captureFrame(context, "liveness-action.jpg", 640);
+      session.baselineImage = baseline.image;
+      const minimumPoseDelta = Number(challenge.minimum_pose_delta) || 0.045;
+      const actionImage = await waitForPoseChange(context, session, baseline.pose, minimumPoseDelta);
       if (session.cancelled || state.livenessSession !== session) return;
       if (context === "register") {
         const form = new FormData();

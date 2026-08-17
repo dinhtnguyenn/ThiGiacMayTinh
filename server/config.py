@@ -48,7 +48,7 @@ class Settings:
             retention_days=int(os.getenv("FACEOPS_RETENTION_DAYS", "30")),
             match_threshold=float(os.getenv("FACEOPS_MATCH_THRESHOLD", "0.45")),
             challenge_ttl_seconds=int(os.getenv("FACEOPS_CHALLENGE_TTL_SECONDS", "90")),
-            pose_delta_threshold=float(os.getenv("FACEOPS_POSE_DELTA_THRESHOLD", "0.06")),
+            pose_delta_threshold=float(os.getenv("FACEOPS_POSE_DELTA_THRESHOLD", "0.045")),
             max_upload_bytes=int(os.getenv("FACEOPS_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
             max_samples_per_profile=int(os.getenv("FACEOPS_MAX_SAMPLES_PER_PROFILE", "5")),
             min_face_size=int(os.getenv("FACEOPS_MIN_FACE_SIZE", "120")),

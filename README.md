@@ -46,7 +46,7 @@ The server supports a controlled active-liveness challenge. Observe the limitati
 
 ### Important liveness limitation
 
-The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, asks the subject to turn their head slightly, then captures the second frame automatically. It generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
+The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, monitors the live pose for up to 9 seconds, then automatically uses the first frame with sufficient head movement as the second frame. The default pose-delta threshold is `0.045`; it is a starting value that should be calibrated with consented test data. This generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
 
 It is **not** a certified presentation-attack-detection (PAD) or anti-spoofing system. A replayed video or a sophisticated attacker can still defeat it. Do not use this challenge alone for payment, identity proofing, access control, law-enforcement, or any high-risk decision. For those uses, integrate and calibrate a dedicated PAD model, hardware-backed capture controls, rate limits, audit trails, and a human-review path.
 
@@ -113,7 +113,7 @@ The included SQLite database and local Docker volumes are intentionally simple a
 | --- | --- |
 | `POST /api/profiles` | Registers one consented live camera face in the shared server directory. It requires `name`, `consent=true`, `mode=liveness`, one current camera frame, and the challenge baseline frame. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
 | `POST /api/recognitions` | Compares one verified live camera face with the shared server directory. |
-| `POST /api/tracking` | Returns transient InsightFace face-box coordinates for the live camera overlay; it neither identifies a person nor persists images or embeddings. |
+| `POST /api/tracking` | Returns transient InsightFace face-box coordinates and a normalized pose signal for the live camera overlay/liveness orchestration; it neither identifies a person nor persists images or embeddings. |
 | `GET /api/profiles` | Lists shared profile metadata for an administrator only. Requires `X-Admin-Token`. |
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and full embedding vectors for an administrator only. Requires `X-Admin-Token`; it reports source images as unavailable because they are not persisted. |
 | `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |

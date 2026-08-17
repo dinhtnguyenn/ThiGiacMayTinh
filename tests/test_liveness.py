@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 
 from server.face_service import FaceAnalysisError, FaceObservation
-from server.liveness import verify_pose_challenge
+from server.liveness import pose_offset, verify_pose_challenge
 
 
 def observation(nose_x: float) -> FaceObservation:
@@ -23,6 +23,12 @@ def observation(nose_x: float) -> FaceObservation:
 
 
 class LivenessTests(unittest.TestCase):
+    def test_pose_offset_is_scale_independent(self) -> None:
+        original = observation(160)
+        scaled_keypoints = original.keypoints * 2
+
+        self.assertAlmostEqual(pose_offset(original.keypoints), pose_offset(scaled_keypoints))
+
     def test_pose_change_passes_challenge(self) -> None:
         result = verify_pose_challenge(observation(150), observation(160))
 
