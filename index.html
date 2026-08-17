@@ -52,6 +52,7 @@
             <h2>Nhận diện khuôn mặt</h2>
             <p class="result" id="recognitionResult" data-state="idle" aria-live="polite"><strong>Chưa có kết quả</strong><span>Đặt một hoặc nhiều khuôn mặt vào khung hình.</span></p>
             <ol class="recognition-faces" id="recognitionFaces" aria-live="polite"></ol>
+            <details class="processing" id="livenessPanel"><summary>Xác thực người thật</summary><p id="livenessStatus">Dùng camera, giữ đầu thẳng rồi xoay nhẹ theo hướng dẫn. Chỉ hỗ trợ một người trong khung hình.</p><div class="liveness-actions"><button class="text-button" id="startLivenessButton" type="button">Bắt đầu xác thực</button><button class="text-button" id="completeLivenessButton" type="button" hidden>Đã xoay đầu</button></div></details>
             <input class="file-input" id="recognizeImageInput" type="file" accept="image/*" />
             <label class="upload-button" for="recognizeImageInput">Chọn ảnh từ máy</label>
             <p class="file-status" id="recognizeImageStatus">Camera đang nhận diện liên tục.</p>
@@ -69,8 +70,9 @@
             </form>
           </section>
           <section class="management-panel" id="managementPanel" hidden>
-            <div class="manage-head"><h2>Dữ liệu đã đăng ký</h2><div><button class="text-button" id="refreshDataButton" type="button">Làm mới</button><button class="text-button" id="lockManagementButton" type="button">Khóa</button></div></div>
+            <div class="manage-head"><h2>Dữ liệu đã đăng ký</h2><div><button class="text-button" id="calibrateThresholdButton" type="button">Đánh giá ngưỡng</button><button class="text-button" id="refreshDataButton" type="button">Làm mới</button><button class="text-button" id="lockManagementButton" type="button">Khóa</button></div></div>
             <p class="file-status" id="managementSummary">Chưa tải dữ liệu.</p>
+            <details class="processing" id="calibrationPanel"><summary>Đánh giá threshold</summary><p id="calibrationResult">Chỉ quản trị viên mới có thể chạy đánh giá.</p></details>
             <div class="table-wrap"><table id="profilesTable"><thead><tr><th>Tên</th><th>Mẫu</th><th>Đăng ký</th><th></th></tr></thead><tbody id="profilesTableBody"><tr><td colspan="4">Chưa có dữ liệu.</td></tr></tbody></table></div>
           </section>
         </section>

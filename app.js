@@ -34,6 +34,9 @@
     recognitionResult: document.getElementById("recognitionResult"),
     recognitionFaces: document.getElementById("recognitionFaces"),
     recognizeProcessingTrace: document.getElementById("recognizeProcessingTrace"),
+    livenessStatus: document.getElementById("livenessStatus"),
+    startLivenessButton: document.getElementById("startLivenessButton"),
+    completeLivenessButton: document.getElementById("completeLivenessButton"),
     managementGate: document.getElementById("managementGate"),
     managementPanel: document.getElementById("managementPanel"),
     adminForm: document.getElementById("adminForm"),
@@ -41,6 +44,9 @@
     unlockManagementButton: document.getElementById("unlockManagementButton"),
     managementMessage: document.getElementById("managementMessage"),
     managementSummary: document.getElementById("managementSummary"),
+    calibrateThresholdButton: document.getElementById("calibrateThresholdButton"),
+    calibrationPanel: document.getElementById("calibrationPanel"),
+    calibrationResult: document.getElementById("calibrationResult"),
     refreshDataButton: document.getElementById("refreshDataButton"),
     lockManagementButton: document.getElementById("lockManagementButton"),
     profilesTable: document.getElementById("profilesTable"),
@@ -74,6 +80,7 @@
     latestRecognition: null,
     recognitionTracks: [],
     enrollmentTokens: new Map(),
+    livenessSession: null,
   };
 
   const REQUIRED_RECOGNITION_CONFIRMATIONS = 2;
@@ -321,32 +328,35 @@
     state.browserTrackingFrame = window.requestAnimationFrame(() => runBrowserTracking(context));
   }
 
-  async function captureFrame(context, filename) {
+  async function captureFrame(context, filename, maxDimension = 0) {
     const video = videoFor(context);
     if (!state.stream || state.cameraContext !== context || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       throw new ApiError("Camera chưa sẵn sàng.", "camera_required", 422);
     }
     const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+    const sourceWidth = video.videoWidth || 640;
+    const sourceHeight = video.videoHeight || 480;
+    const scale = maxDimension ? Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight)) : 1;
+    canvas.width = Math.round(sourceWidth * scale);
+    canvas.height = Math.round(sourceHeight * scale);
     const drawing = canvas.getContext("2d");
     if (!drawing) throw new ApiError("Không thể chụp hình từ camera.", "capture_unavailable");
     drawing.drawImage(video, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise((resolve, reject) => {
-      canvas.toBlob((result) => result ? resolve(result) : reject(new ApiError("Không thể tạo ảnh camera.", "capture_failed")), "image/jpeg", 0.9);
+      canvas.toBlob((result) => result ? resolve(result) : reject(new ApiError("Không thể tạo ảnh camera.", "capture_failed")), "image/jpeg", 0.82);
     });
     return new File([blob], filename, { type: "image/jpeg" });
   }
 
   async function trackCamera(context) {
-    if (state.trackingRequestActive || state.cameraContext !== context || !state.stream) return;
+    if (state.livenessSession || state.trackingRequestActive || state.cameraContext !== context || !state.stream) return;
     if (videoFor(context).readyState < HTMLMediaElement.HAVE_CURRENT_DATA) {
       state.trackingTimer = window.setTimeout(() => trackCamera(context), 300);
       return;
     }
     state.trackingRequestActive = true;
     try {
-      const image = await captureFrame(context, "tracking.jpg");
+      const image = await captureFrame(context, "tracking.jpg", 640);
       if (context === "recognize") {
         const payload = await requestRecognition(image);
         applyRecognition(payload, true);
@@ -382,8 +392,12 @@
 
   function startTracking(context) {
     if (state.trackingTimer) window.clearTimeout(state.trackingTimer);
-    state.trackingTimer = window.setTimeout(() => trackCamera(context), 120);
     startBrowserTracking(context);
+    if (context === "register" && browserFaceDetector()) {
+      setCameraStatus(context, "Đang theo dõi khuôn mặt trên thiết bị.");
+      return;
+    }
+    state.trackingTimer = window.setTimeout(() => trackCamera(context), 120);
   }
 
   function stopCamera() {
@@ -398,6 +412,7 @@
     state.browserTrackingBusy = false;
     state.latestRecognition = null;
     state.recognitionTracks = [];
+    clearLivenessSession();
     ["register", "recognize"].forEach((context) => {
       panelFor(context).classList.remove("is-live");
       clearTracking(context);
@@ -513,11 +528,60 @@
     }
   }
 
-  async function requestRecognition(image) {
+  async function requestRecognition(image, options = {}) {
     const form = new FormData();
-    form.append("mode", "image");
+    form.append("mode", options.mode || "image");
     form.append("image", image, image.name);
+    if (options.challengeId) form.append("challenge_id", options.challengeId);
+    if (options.baselineImage) form.append("baseline_image", options.baselineImage, options.baselineImage.name);
     return apiFetch("/api/recognitions", { method: "POST", body: form });
+  }
+
+  function clearLivenessSession() {
+    state.livenessSession = null;
+    elements.completeLivenessButton.hidden = true;
+    elements.completeLivenessButton.disabled = false;
+    elements.startLivenessButton.disabled = false;
+  }
+
+  async function startLiveness() {
+    try {
+      if (!(await startCamera("recognize"))) return;
+      if (state.trackingTimer) window.clearTimeout(state.trackingTimer);
+      elements.startLivenessButton.disabled = true;
+      elements.livenessStatus.textContent = "Đang chụp khung hình ban đầu...";
+      const challenge = await apiFetch("/api/liveness/challenge", { method: "POST" });
+      const baselineImage = await captureFrame("recognize", "liveness-baseline.jpg", 640);
+      state.livenessSession = { challengeId: challenge.challenge_id, baselineImage };
+      elements.livenessStatus.textContent = challenge.instruction + " Sau đó chọn “Đã xoay đầu”.";
+      elements.completeLivenessButton.hidden = false;
+    } catch (error) {
+      clearLivenessSession();
+      elements.livenessStatus.textContent = errorMessage(error);
+      if (state.cameraContext === "recognize") startTracking("recognize");
+    }
+  }
+
+  async function completeLiveness() {
+    const session = state.livenessSession;
+    if (!session) return;
+    elements.completeLivenessButton.disabled = true;
+    try {
+      elements.livenessStatus.textContent = "Đang kiểm tra chuyển động và nhận diện...";
+      const actionImage = await captureFrame("recognize", "liveness-action.jpg", 640);
+      const payload = await requestRecognition(actionImage, {
+        mode: "liveness",
+        challengeId: session.challengeId,
+        baselineImage: session.baselineImage,
+      });
+      applyRecognition(payload, false);
+      elements.livenessStatus.textContent = "Xác thực chuyển động đạt. " + (payload.matched ? "Đã nhận diện dữ liệu." : "Chưa có dữ liệu.");
+    } catch (error) {
+      elements.livenessStatus.textContent = errorMessage(error);
+    } finally {
+      clearLivenessSession();
+      if (state.cameraContext === "recognize") startTracking("recognize");
+    }
   }
 
   function applyRecognition(payload, drawCamera) {
@@ -618,6 +682,23 @@
     }
   }
 
+  async function calibrateThreshold() {
+    setButtonState(elements.calibrateThresholdButton, "loading", "Đang tính...");
+    try {
+      const report = await apiFetch("/api/calibration", { admin: true, cache: "no-store" });
+      elements.calibrationPanel.open = true;
+      const counts = report.genuine_pairs + " cặp cùng người, " + report.impostor_pairs + " cặp khác người.";
+      elements.calibrationResult.textContent = report.ready
+        ? counts + " Ngưỡng hiện tại: " + report.current_threshold + ". Gợi ý: " + report.recommended_threshold
+          + " (FAR ước lượng: " + report.estimated_far + ", FRR: " + report.estimated_frr + "). " + report.notice
+        : counts + " " + report.notice;
+      setButtonState(elements.calibrateThresholdButton, "success", "Đã tính");
+    } catch (error) {
+      elements.calibrationResult.textContent = errorMessage(error);
+      setButtonState(elements.calibrateThresholdButton, "error", "Thử lại");
+    }
+  }
+
   async function unlockManagement(event) {
     event.preventDefault();
     const token = elements.adminTokenInput.value;
@@ -699,7 +780,12 @@
       vector.rows = 8;
       vector.spellcheck = false;
       vector.value = JSON.stringify(Array.isArray(sample.embedding_vector) ? sample.embedding_vector : []);
-      section.append(heading, metadata, vectorLabel, vector);
+      const removeButton = document.createElement("button");
+      removeButton.className = "table-button";
+      removeButton.type = "button";
+      removeButton.textContent = "Xóa mẫu này";
+      removeButton.addEventListener("click", () => deleteProfileSample(profile.id, sample.id));
+      section.append(heading, metadata, vectorLabel, vector, removeButton);
       elements.detailsSamples.append(section);
     });
   }
@@ -714,6 +800,21 @@
     } catch (error) {
       elements.managementSummary.textContent = errorMessage(error);
       if (error.status === 401 || error.status === 503) lockManagement(errorMessage(error));
+    }
+  }
+
+  async function deleteProfileSample(profileId, sampleId) {
+    if (!window.confirm("Xóa mẫu embedding này? Không thể hoàn tác.")) return;
+    try {
+      await apiFetch(
+        "/api/profiles/" + encodeURIComponent(profileId) + "/samples/" + encodeURIComponent(sampleId),
+        { admin: true, method: "DELETE" },
+      );
+      closeDetailsDialog();
+      await loadProfiles();
+      elements.managementSummary.textContent = "Đã xóa mẫu. Mở lại Chi tiết để xem dữ liệu mới.";
+    } catch (error) {
+      elements.managementSummary.textContent = errorMessage(error);
     }
   }
 
@@ -774,6 +875,7 @@
     if (tabName === "manage") showManagement();
     if (tabName === "recognize") {
       state.recognitionTracks = [];
+      clearLivenessSession();
       setRecognition("idle", "Chưa có kết quả", "Đặt một hoặc nhiều khuôn mặt vào khung hình.");
       renderRecognitionFaces([]);
     }
@@ -800,8 +902,11 @@
     updateSelectedImage("recognize");
     recognizeUploadedImage();
   });
+  elements.startLivenessButton.addEventListener("click", startLiveness);
+  elements.completeLivenessButton.addEventListener("click", completeLiveness);
   elements.adminForm.addEventListener("submit", unlockManagement);
   elements.refreshDataButton.addEventListener("click", loadProfiles);
+  elements.calibrateThresholdButton.addEventListener("click", calibrateThreshold);
   elements.lockManagementButton.addEventListener("click", () => lockManagement());
   elements.profilesTable.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");

@@ -107,16 +107,6 @@ CREATE TABLE IF NOT EXISTS face_profile_samples (
 CREATE INDEX IF NOT EXISTS face_profile_samples_profile_idx
   ON face_profile_samples(profile_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS notebook_imports (
-  id TEXT PRIMARY KEY,
-  workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  filename TEXT NOT NULL,
-  nbformat TEXT NOT NULL,
-  code_cells INTEGER NOT NULL,
-  markdown_cells INTEGER NOT NULL,
-  kernel_name TEXT,
-  created_at INTEGER NOT NULL
-);
 """
 
 
@@ -185,10 +175,6 @@ class Database:
 
         connection.execute(
             "UPDATE face_profiles SET workspace_id = ? WHERE workspace_id != ?",
-            (PUBLIC_DIRECTORY_ID, PUBLIC_DIRECTORY_ID),
-        )
-        connection.execute(
-            "UPDATE notebook_imports SET workspace_id = ? WHERE workspace_id != ?",
             (PUBLIC_DIRECTORY_ID, PUBLIC_DIRECTORY_ID),
         )
 
@@ -526,6 +512,29 @@ class Database:
             )
         return result.rowcount == 1
 
+    def delete_profile_sample(self, workspace_id: str, profile_id: str, sample_id: str) -> str:
+        """Remove one bad capture while preserving a usable identity template."""
+
+        with self.connection() as connection:
+            sample = connection.execute(
+                """
+                SELECT sample.id FROM face_profile_samples AS sample
+                JOIN face_profiles AS profile ON profile.id = sample.profile_id
+                WHERE sample.id = ? AND sample.profile_id = ? AND profile.workspace_id = ?
+                """,
+                (sample_id, profile_id, workspace_id),
+            ).fetchone()
+            if not sample:
+                return "not_found"
+            sample_count = connection.execute(
+                "SELECT COUNT(*) FROM face_profile_samples WHERE profile_id = ?",
+                (profile_id,),
+            ).fetchone()[0]
+            if sample_count <= 1:
+                return "last_sample"
+            connection.execute("DELETE FROM face_profile_samples WHERE id = ?", (sample_id,))
+        return "deleted"
+
     def update_profile(self, workspace_id: str, profile_id: str, new_name: str) -> bool:
         with self.connection() as connection:
             result = connection.execute(
@@ -533,36 +542,6 @@ class Database:
                 (new_name, profile_id, workspace_id),
             )
         return result.rowcount == 1
-
-    def add_notebook(
-        self,
-        workspace_id: str,
-        filename: str,
-        nbformat: str,
-        code_cells: int,
-        markdown_cells: int,
-        kernel_name: str | None,
-    ) -> str:
-        notebook_id = str(uuid.uuid4())
-        with self.connection() as connection:
-            connection.execute(
-                """
-                INSERT INTO notebook_imports
-                  (id, workspace_id, filename, nbformat, code_cells, markdown_cells, kernel_name, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    notebook_id,
-                    workspace_id,
-                    filename,
-                    nbformat,
-                    code_cells,
-                    markdown_cells,
-                    kernel_name,
-                    int(time.time()),
-                ),
-            )
-        return notebook_id
 
     def delete_workspace(self, workspace_id: str) -> bool:
         with self.connection() as connection:

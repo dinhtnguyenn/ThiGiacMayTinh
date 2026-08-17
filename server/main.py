@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
 import secrets
 import time
 from datetime import datetime, timezone
@@ -15,6 +15,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from .calibration import threshold_report
 from .config import Settings
 from .database import Database, StoredProfile, Workspace
 from .face_service import (
@@ -31,6 +32,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 settings = Settings.from_environment()
 database = Database(settings.database_path, settings.retention_days, settings.signing_secret)
 face_service = InsightFaceService(settings.model_root, settings.insightface_model)
+# CPU inference is intentionally serialized by default so one slow client cannot
+# make every live camera stream unresponsive. Raise this only after benchmarking.
+inference_semaphore = asyncio.Semaphore(settings.max_concurrent_inferences)
 
 app = FastAPI(
     title="FaceOps API",
@@ -123,8 +127,11 @@ async def analyze_faces(
     read_started = time.perf_counter()
     image_bytes = await read_upload(upload, settings.max_upload_bytes)
     read_ms = round((time.perf_counter() - read_started) * 1000)
+    queued_started = time.perf_counter()
     try:
-        observations, analysis_trace = await run_in_threadpool(face_service.analyze_many, image_bytes)
+        async with inference_semaphore:
+            queue_ms = round((time.perf_counter() - queued_started) * 1000)
+            observations, analysis_trace = await run_in_threadpool(face_service.analyze_many, image_bytes)
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
     except RuntimeError:
@@ -143,6 +150,7 @@ async def analyze_faces(
         api_error(422, "face_not_found", "Không tìm thấy khuôn mặt trong khung hình.")
     return observations, [
         trace_step("Server", "Đã nhận và kiểm tra tệp ảnh.", read_ms),
+        trace_step("Server", "Đã vào hàng đợi xử lý khuôn mặt.", queue_ms),
         trace_step("OpenCV", "Đã giải mã ảnh để InsightFace xử lý.", analysis_trace.decode_ms),
         trace_step(
             "InsightFace",
@@ -293,6 +301,16 @@ async def list_profiles(
     }
 
 
+@app.get("/api/calibration")
+async def calibration_report(
+    _: Annotated[None, Depends(require_admin)],
+) -> dict[str, object]:
+    """Calculate an on-demand threshold diagnostic; never changes production config."""
+
+    profiles = database.profiles_for_public_directory(include_embeddings=True)
+    return threshold_report(profiles, settings.match_threshold, settings.calibration_max_pairs)
+
+
 @app.get("/api/profiles/{profile_id}/details")
 async def get_profile_details(
     profile_id: str,
@@ -315,6 +333,23 @@ async def delete_profile(
     deleted = database.delete_profile(workspace.id, profile_id)
     if not deleted:
         api_error(404, "profile_not_found", "Hồ sơ không tồn tại.")
+    return Response(status_code=204)
+
+
+@app.delete("/api/profiles/{profile_id}/samples/{sample_id}", status_code=204)
+async def delete_profile_sample(
+    profile_id: str,
+    sample_id: str,
+    _: Annotated[None, Depends(require_admin)],
+) -> Response:
+    """Let an administrator discard a poor capture without deleting the identity."""
+
+    workspace = database.public_workspace()
+    result = database.delete_profile_sample(workspace.id, profile_id, sample_id)
+    if result == "not_found":
+        api_error(404, "sample_not_found", "Mẫu khuôn mặt không tồn tại.")
+    if result == "last_sample":
+        api_error(409, "last_sample_protected", "Không thể xóa mẫu cuối cùng. Hãy xóa cả hồ sơ nếu cần.")
     return Response(status_code=204)
 
 class ProfileUpdateRequest(BaseModel):
@@ -428,19 +463,30 @@ async def recognize_face(
         )
     )
     matching_started = time.perf_counter()
+    samples_by_dimension: dict[int, tuple[np.ndarray, list[StoredProfile]]] = {}
+    grouped_samples: dict[int, list[tuple[StoredProfile, np.ndarray]]] = {}
+    for profile in profiles:
+        for sample in profile.samples:
+            if sample.embedding_dim <= 0:
+                continue
+            grouped_samples.setdefault(sample.embedding_dim, []).append(
+                (profile, np.frombuffer(sample.embedding, dtype=np.float32))
+            )
+    for dimension, samples in grouped_samples.items():
+        samples_by_dimension[dimension] = (
+            np.vstack([embedding for _, embedding in samples]),
+            [profile for profile, _ in samples],
+        )
     recognition_faces: list[dict[str, object]] = []
     for observation in observations:
         best_profile: StoredProfile | None = None
         best_similarity = -1.0
-        for profile in profiles:
-            for sample in profile.samples:
-                if sample.embedding_dim != observation.embedding.size:
-                    continue
-                candidate = np.frombuffer(sample.embedding, dtype=np.float32)
-                similarity = float(np.dot(observation.embedding, candidate))
-                if similarity > best_similarity:
-                    best_similarity = similarity
-                    best_profile = profile
+        index = samples_by_dimension.get(int(observation.embedding.size))
+        if index:
+            embedding_matrix, sample_profiles = index
+            best_index = int(np.argmax(embedding_matrix @ observation.embedding))
+            best_similarity = float(embedding_matrix[best_index] @ observation.embedding)
+            best_profile = sample_profiles[best_index]
         matched = best_profile is not None and best_similarity >= settings.match_threshold
         recognition_faces.append(
             {
@@ -488,46 +534,6 @@ async def track_faces(
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,
         "faces": [{"box": bounding_box_payload(observation)} for observation in observations],
-    }
-
-
-@app.post("/api/models/notebook", status_code=201)
-async def import_notebook(
-    workspace: Annotated[Workspace, Depends(require_workspace)],
-    notebook: Annotated[UploadFile, File()],
-) -> dict[str, object]:
-    filename = Path(notebook.filename or "").name
-    if not filename.lower().endswith(".ipynb"):
-        api_error(422, "invalid_notebook", "Chỉ nhận tệp .ipynb.")
-    content = await read_upload(notebook, min(settings.max_upload_bytes, 2 * 1024 * 1024))
-    try:
-        parsed = json.loads(content.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        api_error(422, "invalid_notebook", "Tệp không phải JSON Jupyter hợp lệ.")
-    cells = parsed.get("cells") if isinstance(parsed, dict) else None
-    if not isinstance(cells, list):
-        api_error(422, "invalid_notebook", "Notebook không có danh sách cells hợp lệ.")
-    metadata = parsed.get("metadata", {}) if isinstance(parsed.get("metadata", {}), dict) else {}
-    kernelspec = metadata.get("kernelspec", {}) if isinstance(metadata.get("kernelspec", {}), dict) else {}
-    code_cells = sum(cell.get("cell_type") == "code" for cell in cells if isinstance(cell, dict))
-    markdown_cells = sum(cell.get("cell_type") == "markdown" for cell in cells if isinstance(cell, dict))
-    notebook_id = database.add_notebook(
-        workspace.id,
-        filename,
-        str(parsed.get("nbformat", "unknown")),
-        code_cells,
-        markdown_cells,
-        str(kernelspec.get("name")) if kernelspec.get("name") else None,
-    )
-    return {
-        "id": notebook_id,
-        "filename": filename,
-        "nbformat": str(parsed.get("nbformat", "unknown")),
-        "code_cells": code_cells,
-        "markdown_cells": markdown_cells,
-        "kernel_name": kernelspec.get("name"),
-        "execution": "not_run",
-        "notice": "Notebook được kiểm tra metadata, không thực thi code hoặc nạp trọng số từ .ipynb.",
     }
 
 

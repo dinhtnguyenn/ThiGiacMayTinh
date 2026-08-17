@@ -55,6 +55,8 @@ input:not(.file-input):focus-visible { border-color: var(--color-accent); outlin
 .processing { border-block-start: var(--rule) solid var(--color-rule); padding-block-start: var(--space-sm); color: var(--color-muted); font-size: var(--text-xs); }
 .processing summary { color: var(--color-ink-2); cursor: pointer; font-weight: 700; }
 .processing ol { display: grid; gap: var(--space-2xs); margin: var(--space-sm) 0 0; padding-inline-start: var(--space-lg); }
+.processing p { margin: var(--space-sm) 0 0; }
+.liveness-actions { display: flex; flex-wrap: wrap; gap: var(--space-xs); margin-block-start: var(--space-sm); }
 .result { display: grid; gap: var(--space-2xs); margin: 0; padding: var(--space-md); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper-2); }
 .result strong { font-size: var(--text-md); }
 .result span { color: var(--color-muted); font-size: var(--text-sm); }

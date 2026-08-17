@@ -6,7 +6,7 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 | Feature | Behavior |
 | --- | --- |
-| Face registration | The user enters a name, opens the webcam, and saves a quality-checked InsightFace embedding on the server. Repeating the same name adds another capture to that identity. |
+| Face registration | The user enters a name, opens the webcam, and saves a quality-checked InsightFace embedding on the server. The same active browser session can add further captures to that identity. |
 | Face recognition | Any device using the same deployed website can identify a face registered on the server. The app shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
 | Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
@@ -15,15 +15,16 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 The website has three modules:
 
 1. **Đăng ký** — the page asks for camera permission when it opens. Enter a name and select **Đăng ký khuôn mặt**; the app opens the camera automatically if no image was selected. A success message remains on this tab. Registration accepts exactly one face to avoid assigning a name to the wrong person. It rejects faces that are too small, blurry, badly exposed, or uncertain before persisting an embedding.
-2. **Nhận diện** — the camera opens automatically when this tab is selected and sends frames for recognition continuously. Selecting one uploaded image runs one recognition immediately. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result. Live camera matches must agree for two consecutive server results before the UI shows a stored name, reducing label flicker and accidental one-frame matches.
+2. **Nhận diện** — the camera opens automatically when this tab is selected and sends frames for recognition continuously. Selecting one uploaded image runs one recognition immediately. A single image may contain multiple people; each detected face receives its own `Đã tìm thấy dữ liệu` or `Chưa có dữ liệu` result. Live camera matches must agree for two consecutive server results before the UI shows a stored name. The optional active-liveness flow captures a baseline frame, then requires one person to turn their head before it recognizes the action frame.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, inspect each profile's stored samples and complete float32 embedding vectors, rename a profile, or delete one. It also states explicitly that source images are not stored. The token is kept only in the tab's memory and is never written to browser storage.
 
-The simple UI sends either a fresh webcam frame or one selected image in static-image mode. It does not expose the former liveness or notebook controls. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browsers without this API fall back to the server-provided boxes. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
+The simple UI sends either a fresh webcam frame or one selected image in static-image mode. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines identity. Browser-side registration tracking avoids redundant server requests; recognition frames are resized to a 640 px maximum before upload. Browsers without this API fall back to the server-provided boxes. Camera frames are not stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
 
 ### Better enrollment and matching
 
 - A profile can contain up to five enrollment samples by default. Immediately after the first registration, register again with the same name in the same browser tab to add another capture; vary it between straight ahead, slight left/right turn, and normal lighting. The server keeps one profile and compares a recognition embedding with every stored sample, selecting the highest similarity. A name by itself never adds a sample to an existing identity, so another public visitor cannot contaminate that person's profile simply by typing the same name.
-- The maximum can be configured with `FACEOPS_MAX_SAMPLES_PER_PROFILE`. Do not turn it into an unbounded value: a small, curated set of high-quality and varied samples is more useful than many nearly identical frames.
+- The maximum can be configured with `FACEOPS_MAX_SAMPLES_PER_PROFILE`. Administrators can inspect and delete one poor sample while the server protects the last usable sample. Do not turn the limit into an unbounded value: a small, curated set of high-quality and varied samples is more useful than many nearly identical frames.
+- Administrators can run a non-destructive threshold diagnostic using same-profile and cross-profile sample pairs. It recommends a value but never changes `FACEOPS_MATCH_THRESHOLD`; use a separately labelled, consented evaluation set before changing production configuration.
 - Before creating a sample, the API checks detected face size, detector confidence, blur (Laplacian variance), and exposure on the in-memory face crop. The configurable defaults are `FACEOPS_MIN_FACE_SIZE=120`, `FACEOPS_MIN_DETECTION_SCORE=0.65`, `FACEOPS_MIN_FACE_SHARPNESS=35`, `FACEOPS_MIN_FACE_BRIGHTNESS=45`, and `FACEOPS_MAX_FACE_BRIGHTNESS=220`.
 - These image-quality checks improve recognition references; they are not liveness or presentation-attack detection. Do not treat a high quality score as proof that a person is physically present.
 
@@ -37,11 +38,11 @@ The simple UI sends either a fresh webcam frame or one selected image in static-
 - Shared profiles are retained in the server database until an administrator deliberately removes them. `FACEOPS_RETENTION_DAYS` applies only to the legacy workspace integration retained for backward compatibility.
 - This makes every successful registration searchable by every visitor to this deployment. Use it only for a consented, controlled group; protect the site with access control if it is not intended to be a fully public directory. Obtain the legal review, consent wording, retention policy, security controls, and incident process applicable in the deployment jurisdiction.
 
-At startup, the upgrade moves existing face profiles and notebook metadata from legacy workspaces into the shared directory in the same SQLite transaction that initializes the schema. The multi-sample migration also creates one sample record for every existing embedding, only when that profile has no samples yet. It is idempotent: restarts and CI/CD deployments neither recreate the database nor duplicate or delete existing profiles. This makes pre-existing profiles available from every device, matching the shared-directory setting.
+At startup, the upgrade moves existing face profiles into the shared directory in the same SQLite transaction that initializes the schema. The multi-sample migration also creates one sample record for every existing embedding, only when that profile has no samples yet. It is idempotent: restarts and CI/CD deployments neither recreate the database nor duplicate or delete existing profiles. This makes pre-existing profiles available from every device, matching the shared-directory setting.
 
 ## Advanced API capabilities
 
-The server retains optional liveness and notebook-inspection endpoints for controlled integrations, but the streamlined public UI does not expose them. If a separate client uses the liveness API, observe the limitation below.
+The server supports a controlled active-liveness challenge. Observe the limitation below.
 
 ### Important liveness limitation
 
@@ -97,6 +98,11 @@ The application is deployable as a single container, but a public biometric serv
 5. Keep the frontend and API on the same HTTPS origin unless you deliberately configure CORS with a small allowlist. Do not serve the repository root as static files; this project exposes only the four required frontend assets.
 6. Calibrate `FACEOPS_MATCH_THRESHOLD`, `FACEOPS_POSE_DELTA_THRESHOLD`, and the enrollment quality limits with consented evaluation data from the intended camera, lighting, demographics, and use case. Their default values are starting configuration values, not universal accuracy guarantees. Do not lower `FACEOPS_MATCH_THRESHOLD` merely to increase apparent match rate; measure false accepts and false rejects first.
 
+### Responsiveness controls
+
+- `FACEOPS_MAX_CONCURRENT_INFERENCES=1` is the safe CPU default. It prevents several public requests from competing for the same InsightFace runtime and making every camera stream slow. Increase it only after measuring the server's CPU/GPU under real load.
+- `FACEOPS_CALIBRATION_MAX_PAIRS=20000` bounds the work of the administrator-only threshold diagnostic. The normal recognition path uses one NumPy matrix multiplication for all compatible stored samples instead of a Python loop per sample.
+
 ### Scale-out note
 
 The included SQLite database and local Docker volumes are intentionally simple and correct for one running container. Do not horizontally scale this exact configuration: separate replicas will not share the directory or embeddings. For multiple replicas, replace SQLite with PostgreSQL, use encrypted managed/object storage for model assets, add a migration strategy, and move any long-running work to a queue.
@@ -112,23 +118,14 @@ The included SQLite database and local Docker volumes are intentionally simple a
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and full embedding vectors for an administrator only. Requires `X-Admin-Token`; it reports source images as unavailable because they are not persisted. |
 | `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |
 | `DELETE /api/profiles/{profile_id}` | Deletes one shared profile for an administrator only. Requires `X-Admin-Token`. |
-| `POST /api/liveness/challenge` | Creates a one-time 90-second challenge for the shared directory flow. |
-| `POST /api/workspaces`, `POST /api/models/notebook`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
+| `POST /api/liveness/challenge` | Creates a one-time 90-second active-liveness challenge for one camera face. |
+| `GET /api/calibration` | Calculates a non-destructive threshold diagnostic from stored samples for an administrator only. Requires `X-Admin-Token`. |
+| `DELETE /api/profiles/{profile_id}/samples/{sample_id}` | Deletes one poor enrollment sample for an administrator only; the final sample is protected. Requires `X-Admin-Token`. |
+| `POST /api/workspaces`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 
 Image uploads are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid files, no-face images, and images with more than one face.
 
 Successful `POST /api/profiles` and `POST /api/recognitions` responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
-
-## Notebook and custom models
-
-An `.ipynb` file is source material, not a deployed model. This application never runs notebook cells and cannot load weights from a notebook. A custom face-recognition model requires a separate, reviewed deployment pipeline for an actual artifact such as `.onnx` or `.pth`, including:
-
-- a malware and provenance review;
-- an explicit model registry and version metadata;
-- compatibility tests for embedding dimensionality and preprocessing;
-- validation and threshold calibration before the model receives public biometric data.
-
-Do not add direct execution of uploaded notebooks to a public service.
 
 ## Tests and checks
 
