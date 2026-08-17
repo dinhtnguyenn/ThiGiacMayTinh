@@ -32,7 +32,7 @@ class LivenessTests(unittest.TestCase):
 
     def test_small_pose_change_is_rejected(self) -> None:
         with self.assertRaises(FaceAnalysisError) as raised:
-            verify_pose_challenge(observation(150), observation(154))
+            verify_pose_challenge(observation(150), observation(153))
 
         self.assertEqual(raised.exception.code, "liveness_challenge_failed")
 

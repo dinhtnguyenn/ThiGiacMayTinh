@@ -30,7 +30,7 @@ def pose_offset(keypoints: np.ndarray) -> float:
 def verify_pose_challenge(
     baseline: FaceObservation,
     challenge: FaceObservation,
-    min_pose_delta: float = 0.045,
+    min_pose_delta: float = 0.035,
 ) -> LivenessResult:
     """Require a measurable face-pose change between two freshly captured frames."""
 

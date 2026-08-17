@@ -501,7 +501,7 @@
 
   function livenessFailureMessage(error) {
     if (error instanceof ApiError && ["liveness_challenge_failed", "multiple_faces", "face_not_found"].includes(error.code)) {
-      return "Không thể xác thực người thật. Không dùng ảnh, màn hình hoặc video; hãy nhìn camera và xoay nhẹ đầu rồi thử lại.";
+      return "Không thể xác thực người thật. Nhìn thẳng camera một nhịp, rồi xoay đầu rõ sang trái hoặc phải và giữ yên đến khi hoàn tất.";
     }
     return errorMessage(error);
   }
@@ -524,14 +524,14 @@
       } else {
         setRecognition("idle", "Đang xác thực người thật", "Hãy nhìn camera và xoay nhẹ đầu.");
       }
-      setCameraStatus(context, "Đang xác thực người thật. Hãy xoay nhẹ đầu.");
+      setCameraStatus(context, "Nhìn thẳng một nhịp, rồi xoay đầu rõ sang trái hoặc phải.");
       const challenge = await apiFetch("/api/liveness/challenge", { method: "POST" });
       const baselineImage = await captureFrame(context, "liveness-baseline.jpg", 640);
       if (session.cancelled || state.livenessSession !== session) return;
       session.challengeId = challenge.challenge_id;
       session.baselineImage = baselineImage;
       // The two frames stay automatic, but this pause gives the person time to react.
-      await pause(3000);
+      await pause(4000);
       if (session.cancelled || state.livenessSession !== session) return;
       const actionImage = await captureFrame(context, "liveness-action.jpg", 640);
       if (session.cancelled || state.livenessSession !== session) return;

@@ -46,7 +46,7 @@ The server supports a controlled active-liveness challenge. Observe the limitati
 
 ### Important liveness limitation
 
-The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, gives the subject 3 seconds to turn their head slightly, then captures the second frame automatically. The default pose-delta threshold is `0.045`; it is a starting value that should be calibrated with consented test data. This generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
+The included liveness check is a real **two-frame head-pose challenge**. The site captures a baseline webcam frame, gives the subject 4 seconds to look straight briefly and then turn their head clearly left or right, then captures the second frame automatically. The default pose-delta threshold is `0.035`; it is a starting value that should be calibrated with consented test data. This generally rejects a single unchanged photo in the normal web flow, and the API does not offer a static-image bypass.
 
 It is **not** a certified presentation-attack-detection (PAD) or anti-spoofing system. A replayed video or a sophisticated attacker can still defeat it. Do not use this challenge alone for payment, identity proofing, access control, law-enforcement, or any high-risk decision. For those uses, integrate and calibrate a dedicated PAD model, hardware-backed capture controls, rate limits, audit trails, and a human-review path.
 
