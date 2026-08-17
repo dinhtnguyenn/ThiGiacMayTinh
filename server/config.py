@@ -22,6 +22,7 @@ class Settings:
     pad_model_url: str
     pad_model_sha256: str
     pad_live_threshold: float
+    pad_spoof_threshold: float
     retention_days: int
     match_threshold: float
     challenge_ttl_seconds: int
@@ -64,7 +65,8 @@ class Settings:
                 "FACEOPS_PAD_MODEL_SHA256",
                 "d7b3cd9ba8a7ceb13baa8c4720902e27ca3112eff52f926c08804af6b6eecc7b",
             ),
-            pad_live_threshold=float(os.getenv("FACEOPS_PAD_LIVE_THRESHOLD", "0.80")),
+            pad_live_threshold=float(os.getenv("FACEOPS_PAD_LIVE_THRESHOLD", "0.55")),
+            pad_spoof_threshold=float(os.getenv("FACEOPS_PAD_SPOOF_THRESHOLD", "0.97")),
             retention_days=int(os.getenv("FACEOPS_RETENTION_DAYS", "30")),
             match_threshold=float(os.getenv("FACEOPS_MATCH_THRESHOLD", "0.45")),
             challenge_ttl_seconds=int(os.getenv("FACEOPS_CHALLENGE_TTL_SECONDS", "90")),
@@ -107,6 +109,10 @@ class Settings:
             raise RuntimeError("FACEOPS_PAD_MODEL_URL must use HTTPS.")
         if not 0 < self.pad_live_threshold < 1:
             raise RuntimeError("FACEOPS_PAD_LIVE_THRESHOLD must be between 0 and 1.")
+        if not 0 < self.pad_spoof_threshold < 1:
+            raise RuntimeError("FACEOPS_PAD_SPOOF_THRESHOLD must be between 0 and 1.")
+        if self.pad_spoof_threshold <= self.pad_live_threshold:
+            raise RuntimeError("FACEOPS_PAD_SPOOF_THRESHOLD must be greater than FACEOPS_PAD_LIVE_THRESHOLD.")
         if self.max_samples_per_profile < 1:
             raise RuntimeError("FACEOPS_MAX_SAMPLES_PER_PROFILE must be at least 1.")
         if self.min_face_size < 32:

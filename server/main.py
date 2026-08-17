@@ -42,6 +42,7 @@ pad_service = PresentationAttackService(
     settings.pad_model_url,
     settings.pad_model_sha256,
     settings.pad_live_threshold,
+    settings.pad_spoof_threshold,
 )
 # CPU inference is intentionally serialized by default so one slow client cannot
 # make every live camera stream unresponsive. Raise this only after benchmarking.

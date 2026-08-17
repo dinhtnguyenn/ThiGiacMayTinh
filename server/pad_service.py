@@ -26,11 +26,19 @@ class PresentationResult:
 class PresentationAttackService:
     """Classify every detected crop as live, spoof, or uncertain in one ONNX batch."""
 
-    def __init__(self, model_path: Path, model_url: str, model_sha256: str, live_threshold: float) -> None:
+    def __init__(
+        self,
+        model_path: Path,
+        model_url: str,
+        model_sha256: str,
+        live_threshold: float,
+        spoof_threshold: float,
+    ) -> None:
         self.model_path = model_path
         self.model_url = model_url
         self.model_sha256 = model_sha256.lower()
         self.live_threshold = live_threshold
+        self.spoof_threshold = spoof_threshold
         self._session = None
         self._load_lock = threading.Lock()
 
@@ -132,7 +140,7 @@ class PresentationAttackService:
         if live_score >= self.live_threshold:
             status = "live"
             attack_type = None
-        elif spoof_score >= self.live_threshold:
+        elif spoof_score >= self.spoof_threshold:
             status = "spoof"
             attack_type = "print" if print_score >= replay_score else "replay"
         else:

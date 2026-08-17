@@ -51,6 +51,16 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "FACEOPS_PAD_MODEL_SHA256"):
             settings.validate_for_startup()
 
+    def test_pad_spoof_threshold_must_exceed_live_threshold(self) -> None:
+        settings = replace(
+            Settings.from_environment(),
+            pad_live_threshold=0.8,
+            pad_spoof_threshold=0.8,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_PAD_SPOOF_THRESHOLD"):
+            settings.validate_for_startup()
+
 
 if __name__ == "__main__":
     unittest.main()

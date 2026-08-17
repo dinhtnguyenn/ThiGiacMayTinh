@@ -14,7 +14,8 @@ class PresentationAttackServiceTests(unittest.TestCase):
             Path("/tmp/minifasnet_v2.onnx"),
             "https://example.test/minifasnet_v2.onnx",
             "0" * 64,
-            0.8,
+            0.55,
+            0.97,
         )
 
     def test_high_live_score_is_live(self) -> None:
@@ -24,13 +25,13 @@ class PresentationAttackServiceTests(unittest.TestCase):
         self.assertIsNone(result.attack_type)
 
     def test_high_print_score_is_spoof(self) -> None:
-        result = self.service._result_from_scores(np.array([0.02, 0.94, 0.04], dtype=np.float32))
+        result = self.service._result_from_scores(np.array([0.002, 0.994, 0.004], dtype=np.float32))
 
         self.assertEqual(result.status, "spoof")
         self.assertEqual(result.attack_type, "print")
 
     def test_high_replay_score_is_spoof(self) -> None:
-        result = self.service._result_from_scores(np.array([0.06, 0.03, 0.91], dtype=np.float32))
+        result = self.service._result_from_scores(np.array([0.006, 0.003, 0.991], dtype=np.float32))
 
         self.assertEqual(result.status, "spoof")
         self.assertEqual(result.attack_type, "replay")
