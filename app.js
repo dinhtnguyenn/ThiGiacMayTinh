@@ -28,6 +28,9 @@
     registerUploadInput: document.getElementById("registerUploadInput"),
     registerUseCameraButton: document.getElementById("registerUseCameraButton"),
     registerPreview: document.getElementById("registerPreview"),
+    registerCropEditor: document.getElementById("registerCropEditor"),
+    registerCropSelection: document.getElementById("registerCropSelection"),
+    registerCropHint: document.getElementById("registerCropHint"),
     registerPreviewActions: document.getElementById("registerPreviewActions"),
     confirmRegistrationButton: document.getElementById("confirmRegistrationButton"),
     cancelRegistrationButton: document.getElementById("cancelRegistrationButton"),
@@ -86,9 +89,13 @@
     registrationUpload: null,
     recognitionUpload: null,
     previewUrls: new Map(),
+    cropEditor: null,
   };
 
   const REQUIRED_RECOGNITION_CONFIRMATIONS = 2;
+  const DEFAULT_CROP_SELECTION = Object.freeze({ x: 0.11, y: 0.11, width: 0.78, height: 0.78 });
+  const MIN_CROP_FRACTION = 0.5;
+  const MAX_CROP_DIMENSION = 960;
 
   function errorMessage(error) {
     return error instanceof Error ? error.message : "Không thể hoàn tất thao tác.";
@@ -132,6 +139,179 @@
     image.removeAttribute("src");
     image.hidden = true;
     panelFor(context).classList.remove("has-preview");
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  function cropImageLayout() {
+    if (!state.cropEditor || elements.registerPreview.hidden) return null;
+    const imageWidth = elements.registerPreview.naturalWidth;
+    const imageHeight = elements.registerPreview.naturalHeight;
+    const panelWidth = elements.cameraPanelRegister.clientWidth;
+    const panelHeight = elements.cameraPanelRegister.clientHeight;
+    if (!imageWidth || !imageHeight || !panelWidth || !panelHeight) return null;
+    const scale = Math.min(panelWidth / imageWidth, panelHeight / imageHeight);
+    const width = imageWidth * scale;
+    const height = imageHeight * scale;
+    return { left: (panelWidth - width) / 2, top: (panelHeight - height) / 2, width, height };
+  }
+
+  function renderCropSelection() {
+    const layout = cropImageLayout();
+    const editor = state.cropEditor;
+    if (!layout || !editor) return;
+    const selection = editor.selection;
+    elements.registerCropSelection.style.left = (layout.left + selection.x * layout.width) + "px";
+    elements.registerCropSelection.style.top = (layout.top + selection.y * layout.height) + "px";
+    elements.registerCropSelection.style.width = (selection.width * layout.width) + "px";
+    elements.registerCropSelection.style.height = (selection.height * layout.height) + "px";
+  }
+
+  function cropSelectionFromServer(candidate) {
+    if (!candidate || typeof candidate !== "object") return { ...DEFAULT_CROP_SELECTION };
+    const x = Number(candidate.x);
+    const y = Number(candidate.y);
+    const width = Number(candidate.width);
+    const height = Number(candidate.height);
+    if (![x, y, width, height].every(Number.isFinite) || width < MIN_CROP_FRACTION || height < MIN_CROP_FRACTION) {
+      return { ...DEFAULT_CROP_SELECTION };
+    }
+    const boundedWidth = clamp(width, MIN_CROP_FRACTION, 1);
+    const boundedHeight = clamp(height, MIN_CROP_FRACTION, 1);
+    return {
+      x: clamp(x, 0, 1 - boundedWidth),
+      y: clamp(y, 0, 1 - boundedHeight),
+      width: boundedWidth,
+      height: boundedHeight,
+    };
+  }
+
+  function beginCropEditing(initialSelection) {
+    state.cropEditor = { selection: cropSelectionFromServer(initialSelection), interaction: null };
+    elements.registerCropEditor.hidden = false;
+    elements.registerCropHint.hidden = false;
+    const renderWhenReady = () => window.requestAnimationFrame(renderCropSelection);
+    if (elements.registerPreview.complete && elements.registerPreview.naturalWidth) {
+      renderWhenReady();
+    } else {
+      elements.registerPreview.addEventListener("load", renderWhenReady, { once: true });
+    }
+  }
+
+  function clearCropEditing() {
+    state.cropEditor = null;
+    elements.registerCropEditor.hidden = true;
+    elements.registerCropHint.hidden = true;
+    elements.registerCropSelection.removeAttribute("style");
+  }
+
+  function moveCropSelection(initial, deltaX, deltaY) {
+    return {
+      ...initial,
+      x: clamp(initial.x + deltaX, 0, 1 - initial.width),
+      y: clamp(initial.y + deltaY, 0, 1 - initial.height),
+    };
+  }
+
+  function resizeCropSelection(initial, handle, deltaX, deltaY) {
+    let left = initial.x;
+    let top = initial.y;
+    let right = initial.x + initial.width;
+    let bottom = initial.y + initial.height;
+    if (handle.includes("w")) left = clamp(left + deltaX, 0, right - MIN_CROP_FRACTION);
+    if (handle.includes("e")) right = clamp(right + deltaX, left + MIN_CROP_FRACTION, 1);
+    if (handle.includes("n")) top = clamp(top + deltaY, 0, bottom - MIN_CROP_FRACTION);
+    if (handle.includes("s")) bottom = clamp(bottom + deltaY, top + MIN_CROP_FRACTION, 1);
+    return { x: left, y: top, width: right - left, height: bottom - top };
+  }
+
+  function cropPointerPosition(event) {
+    const layout = cropImageLayout();
+    if (!layout) return null;
+    const panel = elements.cameraPanelRegister.getBoundingClientRect();
+    return {
+      x: clamp((event.clientX - panel.left - layout.left) / layout.width, 0, 1),
+      y: clamp((event.clientY - panel.top - layout.top) / layout.height, 0, 1),
+    };
+  }
+
+  function startCropInteraction(event) {
+    if (!state.cropEditor || (event.pointerType === "mouse" && event.button !== 0)) return;
+    const pointer = cropPointerPosition(event);
+    if (!pointer) return;
+    const handle = event.target.closest("[data-crop-handle]");
+    event.preventDefault();
+    state.cropEditor.interaction = {
+      pointerId: event.pointerId,
+      handle: handle ? handle.dataset.cropHandle : "move",
+      origin: pointer,
+      selection: { ...state.cropEditor.selection },
+    };
+    elements.registerCropSelection.setPointerCapture(event.pointerId);
+  }
+
+  function updateCropInteraction(event) {
+    const editor = state.cropEditor;
+    if (!editor || !editor.interaction || editor.interaction.pointerId !== event.pointerId) return;
+    const pointer = cropPointerPosition(event);
+    if (!pointer) return;
+    event.preventDefault();
+    const interaction = editor.interaction;
+    const deltaX = pointer.x - interaction.origin.x;
+    const deltaY = pointer.y - interaction.origin.y;
+    editor.selection = interaction.handle === "move"
+      ? moveCropSelection(interaction.selection, deltaX, deltaY)
+      : resizeCropSelection(interaction.selection, interaction.handle, deltaX, deltaY);
+    renderCropSelection();
+  }
+
+  function finishCropInteraction(event) {
+    const editor = state.cropEditor;
+    if (!editor || !editor.interaction || editor.interaction.pointerId !== event.pointerId) return;
+    if (elements.registerCropSelection.hasPointerCapture(event.pointerId)) {
+      elements.registerCropSelection.releasePointerCapture(event.pointerId);
+    }
+    editor.interaction = null;
+  }
+
+  function moveCropSelectionWithKeyboard(event) {
+    if (!state.cropEditor || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
+    event.preventDefault();
+    const distance = event.shiftKey ? 0.05 : 0.015;
+    const deltaX = event.key === "ArrowLeft" ? -distance : event.key === "ArrowRight" ? distance : 0;
+    const deltaY = event.key === "ArrowUp" ? -distance : event.key === "ArrowDown" ? distance : 0;
+    state.cropEditor.selection = moveCropSelection(state.cropEditor.selection, deltaX, deltaY);
+    renderCropSelection();
+  }
+
+  async function adjustedRegistrationCrop() {
+    const editor = state.cropEditor;
+    const image = elements.registerPreview;
+    if (!editor || !image.naturalWidth || !image.naturalHeight) {
+      throw new ApiError("Không thể lấy vùng crop. Hãy chụp lại khuôn mặt.", "crop_unavailable", 422);
+    }
+    const selection = editor.selection;
+    const sourceX = clamp(Math.round(selection.x * image.naturalWidth), 0, image.naturalWidth - 1);
+    const sourceY = clamp(Math.round(selection.y * image.naturalHeight), 0, image.naturalHeight - 1);
+    const sourceWidth = clamp(Math.round(selection.width * image.naturalWidth), 1, image.naturalWidth - sourceX);
+    const sourceHeight = clamp(Math.round(selection.height * image.naturalHeight), 1, image.naturalHeight - sourceY);
+    const canvas = document.createElement("canvas");
+    const scale = Math.min(1, MAX_CROP_DIMENSION / Math.max(sourceWidth, sourceHeight));
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const drawing = canvas.getContext("2d");
+    if (!drawing) throw new ApiError("Không thể tạo vùng crop.", "crop_unavailable", 422);
+    drawing.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (result) => result ? resolve(result) : reject(new ApiError("Không thể tạo vùng crop.", "crop_unavailable", 422)),
+        "image/jpeg",
+        0.9,
+      );
+    });
+    return new File([blob], "registration-crop.jpg", { type: "image/jpeg" });
   }
 
   async function apiFetch(path, { admin = false, body, headers, ...options } = {}) {
@@ -507,6 +687,7 @@
   function clearRegistrationPreview() {
     state.pendingRegistration = null;
     elements.registerPreviewActions.hidden = true;
+    clearCropEditing();
     hidePreview(elements.registerPreview, "register");
     setRegistrationPendingState(false);
   }
@@ -565,9 +746,10 @@
       state.pendingRegistration = { ...pending, processing: payload.processing };
       renderProcessing("register", payload.processing);
       showDataPreview(elements.registerPreview, payload.preview_image, "register");
+      beginCropEditing(payload.initial_selection);
       elements.registerPreviewActions.hidden = false;
       setRegistrationPendingState(true);
-      setMessage(elements.registrationMessage, "Kiểm tra ảnh crop rồi chọn Xác nhận để lưu vào CSDL.", "success");
+      setMessage(elements.registrationMessage, "Điều chỉnh vùng crop nếu cần, rồi chọn Xác nhận để lưu vào CSDL.", "success");
       setCameraStatus("register", "Đang chờ xác nhận; chưa lưu CSDL.", "success");
     } catch (error) {
       const message = errorMessage(error);
@@ -583,10 +765,12 @@
     elements.confirmRegistrationButton.disabled = true;
     elements.cancelRegistrationButton.disabled = true;
     try {
-      setMessage(elements.registrationMessage, "Đang lưu embedding vào CSDL...", "");
+      setMessage(elements.registrationMessage, "Đang kiểm tra vùng crop và lưu embedding vào CSDL...", "");
+      const form = new FormData();
+      form.append("image", await adjustedRegistrationCrop(), "registration-crop.jpg");
       const payload = await apiFetch(
         "/api/registrations/" + encodeURIComponent(pending.id) + "/confirm",
-        { method: "POST" },
+        { method: "POST", body: form },
       );
       const enrollment = payload.enrollment || {};
       if (enrollment.enrollment_token) state.enrollmentTokens.set(enrollmentKey(pending.name), enrollment.enrollment_token);
@@ -612,7 +796,9 @@
       setCameraStatus("register", "Đã lưu mẫu khuôn mặt vào CSDL.", "success");
     } catch (error) {
       const message = errorMessage(error);
-      if (error instanceof ApiError && error.code === "pending_registration_not_found") clearRegistrationPreview();
+      if (error instanceof ApiError && ["pending_registration_not_found", "profile_sample_limit_reached"].includes(error.code)) {
+        clearRegistrationPreview();
+      }
       setMessage(elements.registrationMessage, message, "error");
       setCameraStatus("register", message, "error");
     } finally {
@@ -1013,6 +1199,11 @@
   elements.registrationForm.addEventListener("submit", registerFace);
   elements.confirmRegistrationButton.addEventListener("click", confirmRegistration);
   elements.cancelRegistrationButton.addEventListener("click", cancelRegistration);
+  elements.registerCropSelection.addEventListener("pointerdown", startCropInteraction);
+  elements.registerCropSelection.addEventListener("pointermove", updateCropInteraction);
+  elements.registerCropSelection.addEventListener("pointerup", finishCropInteraction);
+  elements.registerCropSelection.addEventListener("pointercancel", finishCropInteraction);
+  elements.registerCropSelection.addEventListener("keydown", moveCropSelectionWithKeyboard);
   elements.registerUploadInput.addEventListener("change", async () => {
     if (state.pendingRegistration) return;
     await selectRegistrationUpload(elements.registerUploadInput.files[0]);
@@ -1038,6 +1229,7 @@
   elements.cancelEditButton.addEventListener("click", () => elements.editDialog.close());
   elements.closeDetailsButton.addEventListener("click", closeDetailsDialog);
   elements.detailsDialog.addEventListener("cancel", () => window.setTimeout(clearDetails, 0));
+  window.addEventListener("resize", renderCropSelection);
   window.addEventListener("beforeunload", stopCamera);
 
   switchTab("register", false);

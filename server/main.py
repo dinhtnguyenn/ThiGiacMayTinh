@@ -135,15 +135,15 @@ def trace_step(component: str, message: str, duration_ms: int | None = None) -> 
     return step
 
 
-async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]], bytes]:
-    observations, steps, _, image_bytes = await analyze_faces(upload)
+async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]], FaceAnalysisTrace, bytes]:
+    observations, steps, analysis_trace, image_bytes = await analyze_faces(upload)
     if len(observations) != 1:
         api_error(
             422,
             "multiple_faces",
             "Đăng ký chỉ nhận một khuôn mặt trong khung hình để tránh lưu nhầm dữ liệu.",
         )
-    return observations[0], steps, image_bytes
+    return observations[0], steps, analysis_trace, image_bytes
 
 
 async def analyze_faces(
@@ -380,7 +380,7 @@ async def create_registration_preview(
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     if source_mode not in {"camera", "upload"}:
         api_error(422, "invalid_source_mode", "Nguồn ảnh đăng ký không hợp lệ.")
-    observation, processing_steps, image_bytes = await analyze_image(image)
+    observation, processing_steps, analysis_trace, image_bytes = await analyze_image(image)
     try:
         quality = validate_enrollment_quality(
             observation,
@@ -420,6 +420,11 @@ async def create_registration_preview(
     return {
         "pending_registration": pending_registration_payload(pending),
         "preview_image": "data:image/jpeg;base64," + base64.b64encode(preview_bytes).decode("ascii"),
+        "initial_selection": face_service.initial_crop_selection(
+            analysis_trace.image_width,
+            analysis_trace.image_height,
+            observation,
+        ),
         "quality": quality_payload(observation),
         "processing": {
             "steps": processing_steps,
@@ -429,10 +434,39 @@ async def create_registration_preview(
 
 
 @app.post("/api/registrations/{pending_id}/confirm", status_code=201)
-async def confirm_registration(pending_id: str) -> dict[str, object]:
-    """Persist a one-time preview only after the visitor explicitly confirms it."""
+async def confirm_registration(
+    pending_id: str,
+    image: Annotated[UploadFile | None, File()] = None,
+) -> dict[str, object]:
+    """Persist a one-time preview, rechecking a browser-adjusted crop when supplied."""
 
     request_started = time.perf_counter()
+    if not pending_registrations.peek(pending_id):
+        api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
+
+    processing_steps: list[dict[str, object]] = []
+    embedding: bytes | None = None
+    embedding_dim: int | None = None
+    quality_score: float | None = None
+    if image is not None:
+        observation, crop_steps, _, _ = await analyze_image(image)
+        try:
+            quality = validate_enrollment_quality(
+                observation,
+                min_face_size=settings.min_face_size,
+                min_detection_score=settings.min_detection_score,
+                min_sharpness=settings.min_face_sharpness,
+                min_brightness=settings.min_face_brightness,
+                max_brightness=settings.max_face_brightness,
+            )
+        except FaceAnalysisError as error:
+            api_error(422, error.code, error.message)
+        embedding = observation.embedding.astype(np.float32).tobytes()
+        embedding_dim = int(observation.embedding.size)
+        quality_score = quality.score
+        processing_steps.extend(crop_steps)
+        processing_steps.append(trace_step("Server", "Đã kiểm tra crop đã điều chỉnh trước khi lưu."))
+
     pending = pending_registrations.consume(pending_id)
     if not pending:
         api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
@@ -442,9 +476,9 @@ async def confirm_registration(pending_id: str) -> dict[str, object]:
         workspace.id,
         pending.name,
         pending.source_mode,
-        pending.embedding,
-        pending.embedding_dim,
-        pending.quality_score,
+        embedding if embedding is not None else pending.embedding,
+        embedding_dim if embedding_dim is not None else pending.embedding_dim,
+        quality_score if quality_score is not None else pending.quality_score,
         settings.max_samples_per_profile,
         pending.enrollment_token,
     )
@@ -463,7 +497,7 @@ async def confirm_registration(pending_id: str) -> dict[str, object]:
             "enrollment_token": enrollment.enrollment_token,
         },
         "processing": {
-            "steps": [
+            "steps": processing_steps + [
                 trace_step(
                     "Server",
                     "Đã lưu tên và embedding vào danh bạ server sau khi xác nhận.",

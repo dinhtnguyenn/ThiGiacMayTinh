@@ -173,6 +173,56 @@ class InsightFaceService:
         )
 
     @staticmethod
+    def crop_face_bounds(
+        image_width: int,
+        image_height: int,
+        observation: FaceObservation,
+    ) -> tuple[int, int, int, int]:
+        """Return a padded, in-bounds face crop that the browser can refine."""
+
+        if observation.bbox is None or observation.bbox.shape != (4,):
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        x1, y1, x2, y2 = (int(round(float(value))) for value in observation.bbox)
+        width, height = max(1, x2 - x1), max(1, y2 - y1)
+        # Keep enough context for a useful initial preview and browser-side adjustment.
+        margin_x, margin_y = int(width * 0.35), int(height * 0.35)
+        left, top = max(0, x1 - margin_x), max(0, y1 - margin_y)
+        right, bottom = min(image_width, x2 + margin_x), min(image_height, y2 + margin_y)
+        if right <= left or bottom <= top:
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        return left, top, right, bottom
+
+    @staticmethod
+    def initial_crop_selection(
+        image_width: int,
+        image_height: int,
+        observation: FaceObservation,
+    ) -> dict[str, float]:
+        """Keep the detected face whole in the initial browser crop selection."""
+
+        if observation.bbox is None or observation.bbox.shape != (4,):
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        crop_left, crop_top, crop_right, crop_bottom = InsightFaceService.crop_face_bounds(
+            image_width,
+            image_height,
+            observation,
+        )
+        x1, y1, x2, y2 = (float(value) for value in observation.bbox)
+        face_width, face_height = max(1.0, x2 - x1), max(1.0, y2 - y1)
+        # This is the old display margin. It becomes the safe default within the larger editor image.
+        selection_left = max(float(crop_left), x1 - face_width * 0.16)
+        selection_top = max(float(crop_top), y1 - face_height * 0.16)
+        selection_right = min(float(crop_right), x2 + face_width * 0.16)
+        selection_bottom = min(float(crop_bottom), y2 + face_height * 0.16)
+        crop_width, crop_height = float(crop_right - crop_left), float(crop_bottom - crop_top)
+        return {
+            "x": (selection_left - crop_left) / crop_width,
+            "y": (selection_top - crop_top) / crop_height,
+            "width": (selection_right - selection_left) / crop_width,
+            "height": (selection_bottom - selection_top) / crop_height,
+        }
+
+    @staticmethod
     def crop_face_preview(image_bytes: bytes, observation: FaceObservation) -> bytes:
         """Encode a display-only face crop without persisting the source frame."""
 
@@ -180,18 +230,11 @@ class InsightFaceService:
             import cv2
         except ImportError as error:
             raise RuntimeError("OpenCV is not installed. Install requirements.txt before starting the API.") from error
-        if observation.bbox is None or observation.bbox.shape != (4,):
-            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
         image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
         if image is None:
             raise FaceAnalysisError("invalid_image", "Tệp không phải một ảnh hợp lệ.")
         image_height, image_width = image.shape[:2]
-        x1, y1, x2, y2 = (int(round(float(value))) for value in observation.bbox)
-        width, height = max(1, x2 - x1), max(1, y2 - y1)
-        # Keep a little context around the detected face so the preview is understandable.
-        margin_x, margin_y = int(width * 0.16), int(height * 0.16)
-        left, top = max(0, x1 - margin_x), max(0, y1 - margin_y)
-        right, bottom = min(image_width, x2 + margin_x), min(image_height, y2 + margin_y)
+        left, top, right, bottom = InsightFaceService.crop_face_bounds(image_width, image_height, observation)
         crop = image[top:bottom, left:right]
         if crop.size == 0:
             raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")

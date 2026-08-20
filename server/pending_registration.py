@@ -66,6 +66,14 @@ class PendingRegistrationStore:
             self._purge_expired(now)
             return self._items.pop(pending_id, None)
 
+    def peek(self, pending_id: str) -> PendingRegistration | None:
+        """Read a valid preview without consuming it so an edited crop can be checked first."""
+
+        now = int(self._clock())
+        with self._lock:
+            self._purge_expired(now)
+            return self._items.get(pending_id)
+
     def discard(self, pending_id: str) -> bool:
         now = int(self._clock())
         with self._lock:

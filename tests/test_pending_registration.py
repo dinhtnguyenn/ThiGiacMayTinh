@@ -34,6 +34,12 @@ class PendingRegistrationStoreTests(unittest.TestCase):
         self.assertTrue(self.store.discard(pending.id))
         self.assertIsNone(self.store.consume(pending.id))
 
+    def test_peek_keeps_the_preview_available_for_confirmation(self) -> None:
+        pending = self.create_pending()
+
+        self.assertEqual(self.store.peek(pending.id), pending)
+        self.assertEqual(self.store.consume(pending.id), pending)
+
     def test_expired_preview_is_not_available_for_confirmation(self) -> None:
         pending = self.create_pending()
         self.now += 60

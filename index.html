@@ -25,7 +25,17 @@
           <div class="camera-panel" id="cameraPanelRegister">
             <video id="liveVideoRegister" playsinline muted aria-label="Luồng camera đăng ký"></video>
             <canvas class="face-tracking" id="registerTrackingCanvas" aria-hidden="true"></canvas>
-            <img class="capture-preview" id="registerPreview" alt="Ảnh khuôn mặt crop để xác nhận đăng ký" hidden />
+            <img class="capture-preview" id="registerPreview" alt="Ảnh khuôn mặt để điều chỉnh vùng crop" hidden />
+            <div class="crop-editor" id="registerCropEditor" hidden>
+              <div class="crop-selection" id="registerCropSelection" role="group" aria-label="Vùng khuôn mặt sẽ được lưu" tabindex="0">
+                <span class="crop-selection-label" aria-hidden="true">Vùng lưu</span>
+                <span class="crop-handle crop-handle-nw" data-crop-handle="nw" aria-hidden="true"></span>
+                <span class="crop-handle crop-handle-ne" data-crop-handle="ne" aria-hidden="true"></span>
+                <span class="crop-handle crop-handle-sw" data-crop-handle="sw" aria-hidden="true"></span>
+                <span class="crop-handle crop-handle-se" data-crop-handle="se" aria-hidden="true"></span>
+              </div>
+            </div>
+            <p class="crop-editor-hint" id="registerCropHint" hidden>Kéo khung để di chuyển, kéo các góc để điều chỉnh vùng crop. Dùng phím mũi tên để di chuyển khung.</p>
             <div class="preview-actions" id="registerPreviewActions" hidden>
               <button class="button" id="confirmRegistrationButton" type="button">Xác nhận</button>
               <button class="text-button preview-cancel" id="cancelRegistrationButton" type="button">Hủy bỏ</button>

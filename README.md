@@ -14,7 +14,7 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 The website has three modules:
 
-1. **Đăng ký** — enter a name, use the default camera or choose `Tải ảnh đăng ký`, then choose `Đăng ký khuôn mặt`. The server detects the face and returns a cropped preview. `Xác nhận` writes the embedding to SQLite; `Hủy bỏ` discards the temporary preview without writing the database. There is a five-minute default confirmation window.
+1. **Đăng ký** — enter a name, use the default camera or choose `Tải ảnh đăng ký`, then choose `Đăng ký khuôn mặt`. The server detects the face and returns a cropped preview. Drag the frame to move it or drag a corner to resize it; the adjusted crop is checked again by InsightFace when `Xác nhận` is pressed. `Xác nhận` writes the resulting embedding to SQLite; `Hủy bỏ` discards the temporary preview without writing the database. There is a five-minute default confirmation window.
 2. **Nhận diện** — opening this tab opens the camera and continuously processes all detected faces at once. `Tải ảnh để nhận diện` pauses the camera stream and processes every face in the selected image immediately. `Dùng camera` returns to continuous recognition.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, inspect each profile's stored samples and complete float32 embedding vectors, rename a profile, or delete one. It also states explicitly that source images are not stored. The token is kept only in the tab's memory and is never written to browser storage.
 
@@ -106,8 +106,8 @@ The included SQLite database and local Docker volumes are intentionally simple a
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/registrations/preview` | Detects one camera/upload face, evaluates quality, creates a crop preview, and holds the embedding in server memory only. It does not write SQLite. |
-| `POST /api/registrations/{pending_id}/confirm` | Consumes the one-time preview and writes its embedding to the shared server directory. |
+| `POST /api/registrations/preview` | Detects one camera/upload face, evaluates quality, creates a crop preview plus a safe initial crop selection, and holds the embedding in server memory only. It does not write SQLite. |
+| `POST /api/registrations/{pending_id}/confirm` | Consumes the one-time preview and writes its embedding to the shared server directory. An optional adjusted crop image is rechecked and becomes the saved embedding. |
 | `DELETE /api/registrations/{pending_id}` | Discards the one-time preview without writing SQLite; cancellation is idempotent. |
 | `POST /api/recognitions` | Extracts InsightFace embeddings for every detected camera/upload face and compares them with the shared server directory. |
 | `POST /api/tracking` | Legacy transient InsightFace box endpoint; the public recognition UI uses `/api/recognitions` so its boxes and recognition labels stay synchronized. |

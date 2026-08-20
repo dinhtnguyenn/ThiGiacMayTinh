@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from server.face_service import FaceAnalysisError, FaceObservation, FaceQuality, validate_enrollment_quality
+from server.face_service import FaceAnalysisError, FaceObservation, FaceQuality, InsightFaceService, validate_enrollment_quality
 
 
 def observation(quality: FaceQuality) -> FaceObservation:
@@ -42,6 +42,44 @@ class FaceQualityTests(unittest.TestCase):
             self.validate(FaceQuality(180, 190, 0.95, 130, 20, 0.6))
 
         self.assertEqual(raised.exception.code, "image_too_blurry")
+
+
+class FaceCropBoundsTests(unittest.TestCase):
+    def test_adds_adjustment_room_around_the_detected_face(self) -> None:
+        face = FaceObservation(
+            embedding=np.ones(4, dtype=np.float32),
+            keypoints=np.ones((5, 2), dtype=np.float32),
+            bbox=np.array([100, 100, 200, 300], dtype=np.float32),
+        )
+
+        bounds = InsightFaceService.crop_face_bounds(1000, 800, face)
+
+        self.assertEqual(bounds, (65, 30, 235, 370))
+
+    def test_crop_bounds_stay_inside_the_source_image(self) -> None:
+        face = FaceObservation(
+            embedding=np.ones(4, dtype=np.float32),
+            keypoints=np.ones((5, 2), dtype=np.float32),
+            bbox=np.array([0, 0, 100, 100], dtype=np.float32),
+        )
+
+        bounds = InsightFaceService.crop_face_bounds(200, 200, face)
+
+        self.assertEqual(bounds, (0, 0, 135, 135))
+
+    def test_initial_selection_never_cuts_a_face_at_the_image_edge(self) -> None:
+        face = FaceObservation(
+            embedding=np.ones(4, dtype=np.float32),
+            keypoints=np.ones((5, 2), dtype=np.float32),
+            bbox=np.array([0, 0, 100, 100], dtype=np.float32),
+        )
+
+        selection = InsightFaceService.initial_crop_selection(200, 200, face)
+
+        self.assertEqual(selection["x"], 0.0)
+        self.assertEqual(selection["y"], 0.0)
+        self.assertGreaterEqual(selection["width"], 100 / 135)
+        self.assertGreaterEqual(selection["height"], 100 / 135)
 
 
 if __name__ == "__main__":
