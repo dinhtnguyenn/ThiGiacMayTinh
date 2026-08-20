@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
 import secrets
 import time
@@ -26,6 +27,7 @@ from .face_service import (
     InsightFaceService,
     validate_enrollment_quality,
 )
+from .pending_registration import PendingRegistrationStore
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +41,7 @@ face_service = InsightFaceService(
 # CPU inference is intentionally serialized by default so one slow client cannot
 # make every live camera stream unresponsive. Raise this only after benchmarking.
 inference_semaphore = asyncio.Semaphore(settings.max_concurrent_inferences)
+pending_registrations = PendingRegistrationStore(settings.pending_registration_ttl_seconds)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
@@ -132,21 +135,21 @@ def trace_step(component: str, message: str, duration_ms: int | None = None) -> 
     return step
 
 
-async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]]]:
-    observations, steps, _ = await analyze_faces(upload)
+async def analyze_image(upload: UploadFile) -> tuple[FaceObservation, list[dict[str, object]], bytes]:
+    observations, steps, _, image_bytes = await analyze_faces(upload)
     if len(observations) != 1:
         api_error(
             422,
             "multiple_faces",
             "Đăng ký chỉ nhận một khuôn mặt trong khung hình để tránh lưu nhầm dữ liệu.",
         )
-    return observations[0], steps
+    return observations[0], steps, image_bytes
 
 
 async def analyze_faces(
     upload: UploadFile,
     require_face: bool = True,
-) -> tuple[list[FaceObservation], list[dict[str, object]], FaceAnalysisTrace]:
+) -> tuple[list[FaceObservation], list[dict[str, object]], FaceAnalysisTrace, bytes]:
     read_started = time.perf_counter()
     image_bytes = await read_upload(upload, settings.max_upload_bytes)
     read_ms = round((time.perf_counter() - read_started) * 1000)
@@ -180,7 +183,7 @@ async def analyze_faces(
             f"Đã phát hiện {analysis_trace.face_count} khuôn mặt và tạo embedding.",
             analysis_trace.inference_ms,
         ),
-    ], analysis_trace
+    ], analysis_trace, image_bytes
 
 
 def profile_payload(profile: StoredProfile, sample_count: int | None = None) -> dict[str, object]:
@@ -190,6 +193,17 @@ def profile_payload(profile: StoredProfile, sample_count: int | None = None) -> 
         "source_mode": profile.source_mode,
         "created_at": as_iso(profile.created_at),
         "sample_count": len(profile.samples) if sample_count is None else sample_count,
+    }
+
+
+def pending_registration_payload(pending) -> dict[str, object]:
+    """Expose the opaque one-time ID and metadata, never the pending embedding."""
+
+    return {
+        "id": pending.id,
+        "name": pending.name,
+        "source_mode": pending.source_mode,
+        "expires_at": as_iso(pending.expires_at),
     }
 
 
@@ -350,11 +364,12 @@ async def update_profile(
     return {"status": "success", "id": profile_id, "name": clean_name}
 
 
-@app.post("/api/profiles", status_code=201)
-async def register_profile(
+@app.post("/api/registrations/preview", status_code=201)
+async def create_registration_preview(
     name: Annotated[str, Form(min_length=2, max_length=100)],
     consent: Annotated[bool, Form()],
     image: Annotated[UploadFile, File()],
+    source_mode: Annotated[str, Form()] = "camera",
     enrollment_token: Annotated[str | None, Form()] = None,
 ) -> dict[str, object]:
     request_started = time.perf_counter()
@@ -363,8 +378,9 @@ async def register_profile(
     clean_name = " ".join(name.split())
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
-    workspace = database.public_workspace()
-    observation, processing_steps = await analyze_image(image)
+    if source_mode not in {"camera", "upload"}:
+        api_error(422, "invalid_source_mode", "Nguồn ảnh đăng ký không hợp lệ.")
+    observation, processing_steps, image_bytes = await analyze_image(image)
     try:
         quality = validate_enrollment_quality(
             observation,
@@ -376,39 +392,34 @@ async def register_profile(
         )
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
-    processing_steps.append(trace_step("Chất lượng", "Ảnh khuôn mặt đạt điều kiện lưu mẫu."))
-    storage_started = time.perf_counter()
-    enrollment = database.enroll_profile_sample(
-        workspace.id,
-        clean_name,
-        "camera",
-        observation.embedding.astype(np.float32).tobytes(),
-        int(observation.embedding.size),
-        quality.score,
-        settings.max_samples_per_profile,
-        enrollment_token,
+    preview_started = time.perf_counter()
+    try:
+        async with inference_semaphore:
+            preview_bytes = await run_in_threadpool(face_service.crop_face_preview, image_bytes, observation)
+    except FaceAnalysisError as error:
+        api_error(422, error.code, error.message)
+    except RuntimeError:
+        api_error(503, "preview_unavailable", "Không thể tạo ảnh crop xem trước. Hãy thử lại sau.")
+    pending = pending_registrations.create(
+        name=clean_name,
+        source_mode=source_mode,
+        embedding=observation.embedding.astype(np.float32).tobytes(),
+        embedding_dim=int(observation.embedding.size),
+        quality_score=quality.score,
+        enrollment_token=enrollment_token,
     )
-    if enrollment is None:
-        api_error(
-            409,
-            "profile_sample_limit_reached",
-            f"Hồ sơ này đã đủ {settings.max_samples_per_profile} mẫu. Hãy dùng Quản lý dữ liệu nếu cần thay đổi.",
-        )
     processing_steps.append(
         trace_step(
-            "Server",
-            "Đã lưu tên và embedding vào danh bạ server.",
-            round((time.perf_counter() - storage_started) * 1000),
+            "Chất lượng",
+            "Ảnh khuôn mặt đạt điều kiện. Đang chờ xác nhận để lưu.",
         )
     )
+    processing_steps.append(
+        trace_step("Server", "Đã tạo ảnh crop xem trước; chưa lưu CSDL.", round((time.perf_counter() - preview_started) * 1000))
+    )
     return {
-        "profile": profile_payload(enrollment.profile, enrollment.sample_count),
-        "enrollment": {
-            "created_profile": enrollment.created_profile,
-            "sample_count": enrollment.sample_count,
-            "max_samples": settings.max_samples_per_profile,
-            "enrollment_token": enrollment.enrollment_token,
-        },
+        "pending_registration": pending_registration_payload(pending),
+        "preview_image": "data:image/jpeg;base64," + base64.b64encode(preview_bytes).decode("ascii"),
         "quality": quality_payload(observation),
         "processing": {
             "steps": processing_steps,
@@ -417,13 +428,68 @@ async def register_profile(
     }
 
 
+@app.post("/api/registrations/{pending_id}/confirm", status_code=201)
+async def confirm_registration(pending_id: str) -> dict[str, object]:
+    """Persist a one-time preview only after the visitor explicitly confirms it."""
+
+    request_started = time.perf_counter()
+    pending = pending_registrations.consume(pending_id)
+    if not pending:
+        api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
+    workspace = database.public_workspace()
+    storage_started = time.perf_counter()
+    enrollment = database.enroll_profile_sample(
+        workspace.id,
+        pending.name,
+        pending.source_mode,
+        pending.embedding,
+        pending.embedding_dim,
+        pending.quality_score,
+        settings.max_samples_per_profile,
+        pending.enrollment_token,
+    )
+    if enrollment is None:
+        api_error(
+            409,
+            "profile_sample_limit_reached",
+            f"Hồ sơ này đã đủ {settings.max_samples_per_profile} mẫu. Hãy dùng Quản lý dữ liệu nếu cần thay đổi.",
+        )
+    return {
+        "profile": profile_payload(enrollment.profile, enrollment.sample_count),
+        "enrollment": {
+            "created_profile": enrollment.created_profile,
+            "sample_count": enrollment.sample_count,
+            "max_samples": settings.max_samples_per_profile,
+            "enrollment_token": enrollment.enrollment_token,
+        },
+        "processing": {
+            "steps": [
+                trace_step(
+                    "Server",
+                    "Đã lưu tên và embedding vào danh bạ server sau khi xác nhận.",
+                    round((time.perf_counter() - storage_started) * 1000),
+                )
+            ],
+            "total_ms": round((time.perf_counter() - request_started) * 1000),
+        },
+    }
+
+
+@app.delete("/api/registrations/{pending_id}", status_code=204)
+async def cancel_registration(pending_id: str) -> Response:
+    """Discard the in-memory preview without writing biometric data to SQLite."""
+
+    pending_registrations.discard(pending_id)
+    return Response(status_code=204)
+
+
 @app.post("/api/recognitions")
 async def recognize_face(
     image: Annotated[UploadFile, File()],
 ) -> dict[str, object]:
     request_started = time.perf_counter()
     workspace = database.public_workspace()
-    observations, processing_steps, analysis_trace = await analyze_faces(image)
+    observations, processing_steps, analysis_trace, _ = await analyze_faces(image)
     lookup_started = time.perf_counter()
     profiles = database.profiles_for_workspace(workspace.id, include_embeddings=True)
     processing_steps.append(
@@ -506,7 +572,7 @@ async def track_faces(
 ) -> dict[str, object]:
     """Return live InsightFace boxes only; tracking frames are never stored."""
 
-    observations, _, analysis_trace = await analyze_faces(image, require_face=False)
+    observations, _, analysis_trace, _ = await analyze_faces(image, require_face=False)
     return {
         "image_width": analysis_trace.image_width,
         "image_height": analysis_trace.image_height,

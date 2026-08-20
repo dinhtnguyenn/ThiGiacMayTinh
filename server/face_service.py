@@ -173,6 +173,34 @@ class InsightFaceService:
         )
 
     @staticmethod
+    def crop_face_preview(image_bytes: bytes, observation: FaceObservation) -> bytes:
+        """Encode a display-only face crop without persisting the source frame."""
+
+        try:
+            import cv2
+        except ImportError as error:
+            raise RuntimeError("OpenCV is not installed. Install requirements.txt before starting the API.") from error
+        if observation.bbox is None or observation.bbox.shape != (4,):
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise FaceAnalysisError("invalid_image", "Tệp không phải một ảnh hợp lệ.")
+        image_height, image_width = image.shape[:2]
+        x1, y1, x2, y2 = (int(round(float(value))) for value in observation.bbox)
+        width, height = max(1, x2 - x1), max(1, y2 - y1)
+        # Keep a little context around the detected face so the preview is understandable.
+        margin_x, margin_y = int(width * 0.16), int(height * 0.16)
+        left, top = max(0, x1 - margin_x), max(0, y1 - margin_y)
+        right, bottom = min(image_width, x2 + margin_x), min(image_height, y2 + margin_y)
+        crop = image[top:bottom, left:right]
+        if crop.size == 0:
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        encoded, preview = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+        if not encoded:
+            raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        return preview.tobytes()
+
+    @staticmethod
     def _face_quality(image: np.ndarray, bbox: np.ndarray, detection_score: float) -> FaceQuality:
         """Measure lighting and focus on the detected crop, never persisting pixels."""
 

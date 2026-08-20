@@ -25,6 +25,11 @@
           <div class="camera-panel" id="cameraPanelRegister">
             <video id="liveVideoRegister" playsinline muted aria-label="Luồng camera đăng ký"></video>
             <canvas class="face-tracking" id="registerTrackingCanvas" aria-hidden="true"></canvas>
+            <img class="capture-preview" id="registerPreview" alt="Ảnh khuôn mặt crop để xác nhận đăng ký" hidden />
+            <div class="preview-actions" id="registerPreviewActions" hidden>
+              <button class="button" id="confirmRegistrationButton" type="button">Xác nhận</button>
+              <button class="text-button preview-cancel" id="cancelRegistrationButton" type="button">Hủy bỏ</button>
+            </div>
             <p class="camera-empty">Đang mở camera...</p>
             <p class="camera-status" id="cameraStatusRegister" aria-live="polite"></p>
           </div>
@@ -33,6 +38,10 @@
             <p class="file-status">Đặt một khuôn mặt rõ nét trước camera. Hệ thống sẽ lưu embedding InsightFace trên server.</p>
             <label for="personName">Họ và tên</label>
             <input id="personName" type="text" autocomplete="name" placeholder="Nguyen Van A" minlength="2" required />
+            <div class="capture-options">
+              <label class="file-button" for="registerUploadInput">Tải ảnh đăng ký<input id="registerUploadInput" type="file" accept="image/*" /></label>
+              <button class="text-button" id="registerUseCameraButton" type="button" hidden>Dùng camera</button>
+            </div>
             <button class="button" id="registerButton" type="submit">Đăng ký khuôn mặt</button>
             <p class="message" id="registrationMessage" role="status" aria-live="polite"></p>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="registerProcessingTrace" aria-live="polite"></ol></details>
@@ -43,12 +52,17 @@
           <div class="camera-panel" id="cameraPanelRecognize">
             <video id="liveVideoRecognize" playsinline muted aria-label="Luồng camera nhận diện"></video>
             <canvas class="face-tracking" id="recognizeTrackingCanvas" aria-hidden="true"></canvas>
+            <img class="capture-preview" id="recognizeUploadPreview" alt="Ảnh được tải để nhận diện" hidden />
             <p class="camera-empty">Camera sẽ tự mở.</p>
             <p class="camera-status" id="cameraStatusRecognize" aria-live="polite"></p>
           </div>
           <div class="action-form">
             <h2>Nhận diện khuôn mặt</h2>
             <p class="file-status">Tất cả khuôn mặt trong khung được nhận diện đồng thời bằng InsightFace.</p>
+            <div class="capture-options">
+              <label class="file-button" for="recognizeUploadInput">Tải ảnh để nhận diện<input id="recognizeUploadInput" type="file" accept="image/*" /></label>
+              <button class="text-button" id="recognizeUseCameraButton" type="button" hidden>Dùng camera</button>
+            </div>
             <p class="result" id="recognitionResult" data-state="idle" aria-live="polite"><strong>Đang chờ khuôn mặt</strong><span>Đặt một hoặc nhiều người vào khung hình để bắt đầu.</span></p>
             <ol class="recognition-faces" id="recognitionFaces" aria-live="polite"></ol>
             <details class="processing"><summary>Xem quá trình xử lý</summary><ol id="recognizeProcessingTrace" aria-live="polite"></ol></details>

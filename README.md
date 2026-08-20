@@ -6,19 +6,19 @@ FaceOps Lab is a Vietnamese web application for registering and recognizing a fa
 
 | Feature | Behavior |
 | --- | --- |
-| Face registration | The user enters a name and the website saves a quality-checked InsightFace embedding from the camera on the server. The same active browser session can add further captures to that identity. |
-| Face recognition | The website detects and compares every face in one camera frame with the shared directory. It shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
+| Face registration | The user captures from camera or chooses an image, reviews a cropped face preview, then explicitly confirms before a quality-checked InsightFace embedding is written to the server. The same active browser session can add further captures to that identity. |
+| Face recognition | The website detects and compares every face in a live camera frame or selected image with the shared directory. It shows the stored name for a match, or `Chưa có dữ liệu` when there is not. |
 | Client storage | The public registration and recognition flow stores neither a workspace token nor face embeddings in browser storage. |
 
 ## User interface
 
 The website has three modules:
 
-1. **Đăng ký** — enter a name and choose `Đăng ký khuôn mặt`. The camera captures one in-memory frame and saves a sample when the InsightFace quality checks pass. There is no image-upload control.
-2. **Nhận diện** — opening this tab opens the camera and continuously processes all detected faces at once. Each matching face can reveal its stored name.
+1. **Đăng ký** — enter a name, use the default camera or choose `Tải ảnh đăng ký`, then choose `Đăng ký khuôn mặt`. The server detects the face and returns a cropped preview. `Xác nhận` writes the embedding to SQLite; `Hủy bỏ` discards the temporary preview without writing the database. There is a five-minute default confirmation window.
+2. **Nhận diện** — opening this tab opens the camera and continuously processes all detected faces at once. `Tải ảnh để nhận diện` pauses the camera stream and processes every face in the selected image immediately. `Dùng camera` returns to continuous recognition.
 3. **Quản lý dữ liệu** — enter the server administrator token to view the directory, inspect each profile's stored samples and complete float32 embedding vectors, rename a profile, or delete one. It also states explicitly that source images are not stored. The token is kept only in the tab's memory and is never written to browser storage.
 
-The UI sends only freshly captured webcam frames. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines the final recognition result. Recognition frames are resized to a 512 px maximum; the less frequent registration capture uses 640 px for better quality checks. Camera frames are never stored. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
+The UI sends camera frames or browser-selected image files only to process the immediate action. While a camera is live, supported browsers use their local Face Detector API for a fast box overlay while InsightFace on the server determines the final recognition result. Recognition frames are resized to a 512 px maximum; the less frequent registration capture uses 640 px for better quality checks. Camera frames and source uploads are never stored. The registration preview's embedding exists only in the server process until confirmation or expiry; it is not written to SQLite until `Xác nhận`. After each registration or recognition, the processing trace is available on demand. The trace never includes raw images, embeddings, filesystem paths, or administrator tokens.
 
 ### Better enrollment and matching
 
@@ -106,8 +106,10 @@ The included SQLite database and local Docker volumes are intentionally simple a
 
 | Endpoint | Purpose |
 | --- | --- |
-| `POST /api/profiles` | Registers one consented camera face in the shared server directory. It requires `name`, `consent=true`, and one frame passing the quality checks. The UI sends an in-memory `enrollment_token` only to add a further sample to a profile it just created. |
-| `POST /api/recognitions` | Extracts InsightFace embeddings for every detected face and compares them with the shared server directory. |
+| `POST /api/registrations/preview` | Detects one camera/upload face, evaluates quality, creates a crop preview, and holds the embedding in server memory only. It does not write SQLite. |
+| `POST /api/registrations/{pending_id}/confirm` | Consumes the one-time preview and writes its embedding to the shared server directory. |
+| `DELETE /api/registrations/{pending_id}` | Discards the one-time preview without writing SQLite; cancellation is idempotent. |
+| `POST /api/recognitions` | Extracts InsightFace embeddings for every detected camera/upload face and compares them with the shared server directory. |
 | `POST /api/tracking` | Legacy transient InsightFace box endpoint; the public recognition UI uses `/api/recognitions` so its boxes and recognition labels stay synchronized. |
 | `GET /api/profiles` | Lists shared profile metadata for an administrator only. Requires `X-Admin-Token`. |
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and full embedding vectors for an administrator only. Requires `X-Admin-Token`; it reports source images as unavailable because they are not persisted. |
@@ -119,7 +121,7 @@ The included SQLite database and local Docker volumes are intentionally simple a
 
 Camera-frame requests are limited by `FACEOPS_MAX_UPLOAD_BYTES` (8 MiB by default). The server rejects invalid frames, no-face frames, and registration frames containing more than one face. Recognition accepts multiple faces.
 
-Successful `POST /api/profiles` and `POST /api/recognitions` responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
+Successful registration-preview, registration-confirmation, and recognition responses include a `processing` object with measured stage durations. These durations are diagnostic information from the server process, not an accuracy or performance guarantee.
 
 ## Tests and checks
 

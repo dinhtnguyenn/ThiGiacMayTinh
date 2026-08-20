@@ -33,5 +33,11 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "FACEOPS_ADMIN_TOKEN"):
             settings.validate_for_startup()
 
+    def test_pending_registration_ttl_must_be_at_least_thirty_seconds(self) -> None:
+        settings = replace(Settings.from_environment(), pending_registration_ttl_seconds=29)
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_PENDING_REGISTRATION_TTL_SECONDS"):
+            settings.validate_for_startup()
+
 if __name__ == "__main__":
     unittest.main()

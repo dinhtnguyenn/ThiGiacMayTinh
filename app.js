@@ -25,10 +25,19 @@
     registrationForm: document.getElementById("registrationForm"),
     personName: document.getElementById("personName"),
     registerButton: document.getElementById("registerButton"),
+    registerUploadInput: document.getElementById("registerUploadInput"),
+    registerUseCameraButton: document.getElementById("registerUseCameraButton"),
+    registerPreview: document.getElementById("registerPreview"),
+    registerPreviewActions: document.getElementById("registerPreviewActions"),
+    confirmRegistrationButton: document.getElementById("confirmRegistrationButton"),
+    cancelRegistrationButton: document.getElementById("cancelRegistrationButton"),
     registrationMessage: document.getElementById("registrationMessage"),
     registerProcessingTrace: document.getElementById("registerProcessingTrace"),
     recognitionResult: document.getElementById("recognitionResult"),
     recognitionFaces: document.getElementById("recognitionFaces"),
+    recognizeUploadInput: document.getElementById("recognizeUploadInput"),
+    recognizeUseCameraButton: document.getElementById("recognizeUseCameraButton"),
+    recognizeUploadPreview: document.getElementById("recognizeUploadPreview"),
     recognizeProcessingTrace: document.getElementById("recognizeProcessingTrace"),
     managementGate: document.getElementById("managementGate"),
     managementPanel: document.getElementById("managementPanel"),
@@ -73,6 +82,10 @@
     latestRecognition: null,
     recognitionTracks: [],
     enrollmentTokens: new Map(),
+    pendingRegistration: null,
+    registrationUpload: null,
+    recognitionUpload: null,
+    previewUrls: new Map(),
   };
 
   const REQUIRED_RECOGNITION_CONFIRMATIONS = 2;
@@ -83,6 +96,42 @@
 
   function enrollmentKey(name) {
     return name.trim().replace(/\s+/g, " ").toLocaleLowerCase("vi-VN");
+  }
+
+  function validImageFile(file) {
+    return file && (file.type.startsWith("image/") || /\.(jpe?g|png|webp|bmp)$/i.test(file.name));
+  }
+
+  function showLocalPreview(key, image, file, context) {
+    const previousUrl = state.previewUrls.get(key);
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    const url = URL.createObjectURL(file);
+    state.previewUrls.set(key, url);
+    image.src = url;
+    image.hidden = false;
+    panelFor(context).classList.add("has-preview");
+  }
+
+  function showDataPreview(image, dataUrl, context) {
+    const previousUrl = state.previewUrls.get(context);
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+      state.previewUrls.delete(context);
+    }
+    image.src = dataUrl;
+    image.hidden = false;
+    panelFor(context).classList.add("has-preview");
+  }
+
+  function hidePreview(image, context) {
+    const previousUrl = state.previewUrls.get(context);
+    if (previousUrl) {
+      URL.revokeObjectURL(previousUrl);
+      state.previewUrls.delete(context);
+    }
+    image.removeAttribute("src");
+    image.hidden = true;
+    panelFor(context).classList.remove("has-preview");
   }
 
   async function apiFetch(path, { admin = false, body, headers, ...options } = {}) {
@@ -441,6 +490,27 @@
     });
   }
 
+  function setRegistrationPendingState(isPending) {
+    elements.personName.disabled = isPending;
+    elements.registerUploadInput.disabled = isPending;
+    elements.registerUseCameraButton.disabled = isPending;
+    elements.registerButton.disabled = isPending;
+    if (isPending) {
+      elements.registerButton.textContent = "Chờ xác nhận";
+      elements.registerButton.dataset.state = "pending";
+      return;
+    }
+    delete elements.registerButton.dataset.state;
+    elements.registerButton.textContent = elements.registerButton.dataset.defaultLabel || "Đăng ký khuôn mặt";
+  }
+
+  function clearRegistrationPreview() {
+    state.pendingRegistration = null;
+    elements.registerPreviewActions.hidden = true;
+    hidePreview(elements.registerPreview, "register");
+    setRegistrationPendingState(false);
+  }
+
   function renderRecognitionFaces(faces) {
     elements.recognitionFaces.replaceChildren();
     faces.forEach((face, index) => {
@@ -464,44 +534,169 @@
 
   async function registerFace(event) {
     event.preventDefault();
+    if (state.pendingRegistration) {
+      setMessage(elements.registrationMessage, "Hãy xác nhận hoặc hủy ảnh crop đang chờ.", "error");
+      return;
+    }
     const name = elements.personName.value.trim();
     if (name.length < 2) {
       setMessage(elements.registrationMessage, "Nhập ít nhất 2 ký tự cho họ và tên.", "error");
       return;
     }
-    if (!(await startCamera("register"))) return;
     try {
-      setMessage(elements.registrationMessage, "Đang xử lý và lưu mẫu khuôn mặt...", "");
-      setButtonState(elements.registerButton, "loading", "Đang đăng ký...");
+      const uploadedImage = state.registrationUpload;
+      if (!uploadedImage && !(await startCamera("register"))) return;
+      setMessage(elements.registrationMessage, "Đang chụp và kiểm tra khuôn mặt. Chưa lưu CSDL...", "");
+      setButtonState(elements.registerButton, "loading", "Đang xử lý...");
       // Enrollment is infrequent, so retain more pixels for the quality gate.
-      const image = await captureFrame("register", "registration.jpg", 640);
+      const image = uploadedImage || await captureFrame("register", "registration.jpg", 640);
       const form = new FormData();
       form.append("name", name);
       form.append("consent", "true");
+      form.append("source_mode", uploadedImage ? "upload" : "camera");
       form.append("image", image, image.name);
       const enrollmentToken = state.enrollmentTokens.get(enrollmentKey(name));
       if (enrollmentToken) form.append("enrollment_token", enrollmentToken);
-      const payload = await apiFetch("/api/profiles", { method: "POST", body: form });
+      const payload = await apiFetch("/api/registrations/preview", { method: "POST", body: form });
+      const pending = payload.pending_registration;
+      if (!pending || !pending.id || typeof payload.preview_image !== "string") {
+        throw new ApiError("Server không trả về ảnh xác nhận đăng ký.", "registration_preview_unavailable");
+      }
+      state.pendingRegistration = { ...pending, processing: payload.processing };
       renderProcessing("register", payload.processing);
-      const enrollment = payload.enrollment || {};
-      if (enrollment.enrollment_token) state.enrollmentTokens.set(enrollmentKey(name), enrollment.enrollment_token);
-      elements.personName.value = "";
-      const sampleCount = Number(enrollment.sample_count) || 1;
-      const maxSamples = Number(enrollment.max_samples) || sampleCount;
-      setMessage(
-        elements.registrationMessage,
-        (enrollment.created_profile ? "Đăng ký thành công: " : "Đã thêm mẫu khuôn mặt cho ")
-          + payload.profile.name + ". Mẫu " + sampleCount + "/" + maxSamples + ".",
-        "success",
-      );
-      setButtonState(elements.registerButton, "success", "Đã đăng ký");
-      setCameraStatus("register", "Đã lưu mẫu khuôn mặt.", "success");
+      showDataPreview(elements.registerPreview, payload.preview_image, "register");
+      elements.registerPreviewActions.hidden = false;
+      setRegistrationPendingState(true);
+      setMessage(elements.registrationMessage, "Kiểm tra ảnh crop rồi chọn Xác nhận để lưu vào CSDL.", "success");
+      setCameraStatus("register", "Đang chờ xác nhận; chưa lưu CSDL.", "success");
     } catch (error) {
       const message = errorMessage(error);
       setMessage(elements.registrationMessage, message, "error");
       setButtonState(elements.registerButton, "error", "Thử lại");
       setCameraStatus("register", message, "error");
     }
+  }
+
+  async function confirmRegistration() {
+    const pending = state.pendingRegistration;
+    if (!pending) return;
+    elements.confirmRegistrationButton.disabled = true;
+    elements.cancelRegistrationButton.disabled = true;
+    try {
+      setMessage(elements.registrationMessage, "Đang lưu embedding vào CSDL...", "");
+      const payload = await apiFetch(
+        "/api/registrations/" + encodeURIComponent(pending.id) + "/confirm",
+        { method: "POST" },
+      );
+      const enrollment = payload.enrollment || {};
+      if (enrollment.enrollment_token) state.enrollmentTokens.set(enrollmentKey(pending.name), enrollment.enrollment_token);
+      const initialSteps = pending.processing && Array.isArray(pending.processing.steps) ? pending.processing.steps : [];
+      const confirmationSteps = payload.processing && Array.isArray(payload.processing.steps) ? payload.processing.steps : [];
+      renderProcessing("register", { steps: [...initialSteps, ...confirmationSteps] });
+      const sampleCount = Number(enrollment.sample_count) || 1;
+      const maxSamples = Number(enrollment.max_samples) || sampleCount;
+      const profileName = payload.profile && payload.profile.name ? payload.profile.name : pending.name;
+      const wasUploaded = pending.source_mode === "upload";
+      elements.personName.value = "";
+      state.registrationUpload = null;
+      elements.registerUploadInput.value = "";
+      elements.registerUseCameraButton.hidden = !wasUploaded;
+      clearRegistrationPreview();
+      setMessage(
+        elements.registrationMessage,
+        (enrollment.created_profile ? "Đăng ký thành công: " : "Đã thêm mẫu khuôn mặt cho ")
+          + profileName + ". Mẫu " + sampleCount + "/" + maxSamples + ".",
+        "success",
+      );
+      setButtonState(elements.registerButton, "success", "Đã lưu");
+      setCameraStatus("register", "Đã lưu mẫu khuôn mặt vào CSDL.", "success");
+    } catch (error) {
+      const message = errorMessage(error);
+      if (error instanceof ApiError && error.code === "pending_registration_not_found") clearRegistrationPreview();
+      setMessage(elements.registrationMessage, message, "error");
+      setCameraStatus("register", message, "error");
+    } finally {
+      elements.confirmRegistrationButton.disabled = false;
+      elements.cancelRegistrationButton.disabled = false;
+    }
+  }
+
+  async function cancelRegistration() {
+    const pending = state.pendingRegistration;
+    if (!pending) return;
+    elements.confirmRegistrationButton.disabled = true;
+    elements.cancelRegistrationButton.disabled = true;
+    try {
+      await apiFetch("/api/registrations/" + encodeURIComponent(pending.id), { method: "DELETE" });
+      clearRegistrationPreview();
+      if (state.registrationUpload) {
+        showLocalPreview("register", elements.registerPreview, state.registrationUpload, "register");
+      }
+      setMessage(elements.registrationMessage, "Đã hủy. Không có dữ liệu nào được lưu vào CSDL.", "");
+      setCameraStatus("register", "Đã hủy ảnh đăng ký.");
+    } catch (error) {
+      setMessage(elements.registrationMessage, errorMessage(error), "error");
+    } finally {
+      elements.confirmRegistrationButton.disabled = false;
+      elements.cancelRegistrationButton.disabled = false;
+    }
+  }
+
+  async function recognizeUploadedImage(file) {
+    if (!validImageFile(file)) {
+      setRecognition("error", "Không thể dùng tệp này", "Hãy chọn một tệp ảnh hợp lệ.");
+      return;
+    }
+    state.recognitionUpload = file;
+    stopCamera();
+    showLocalPreview("recognize", elements.recognizeUploadPreview, file, "recognize");
+    elements.cameraPanelRecognize.classList.add("has-upload");
+    elements.recognizeUseCameraButton.hidden = false;
+    setRecognition("idle", "Đang nhận diện ảnh", "Server đang phát hiện và so khớp các khuôn mặt trong ảnh.");
+    try {
+      const payload = await requestRecognition(file);
+      applyRecognition(payload, false);
+      drawTracking("recognize", payload.faces || [], payload.image_width, payload.image_height, payload.faces || []);
+      setCameraStatus("recognize", "Đã nhận diện ảnh được tải.", "success");
+    } catch (error) {
+      clearTracking("recognize");
+      setRecognition("error", "Không thể nhận diện ảnh", errorMessage(error));
+      setCameraStatus("recognize", errorMessage(error), "error");
+    }
+  }
+
+  async function useRecognitionCamera() {
+    state.recognitionUpload = null;
+    elements.recognizeUploadInput.value = "";
+    elements.recognizeUseCameraButton.hidden = true;
+    elements.cameraPanelRecognize.classList.remove("has-upload");
+    hidePreview(elements.recognizeUploadPreview, "recognize");
+    state.recognitionTracks = [];
+    setRecognition("idle", "Đang chờ khuôn mặt", "Đặt một hoặc nhiều người vào khung hình để bắt đầu.");
+    await startCamera("recognize");
+  }
+
+  async function selectRegistrationUpload(file) {
+    if (!validImageFile(file)) {
+      state.registrationUpload = null;
+      elements.registerUploadInput.value = "";
+      setMessage(elements.registrationMessage, "Hãy chọn một tệp ảnh hợp lệ.", "error");
+      return;
+    }
+    state.registrationUpload = file;
+    stopCamera();
+    showLocalPreview("register", elements.registerPreview, file, "register");
+    elements.registerUseCameraButton.hidden = false;
+    setCameraStatus("register", "Đã chọn ảnh đăng ký. Nhập tên rồi nhấn Đăng ký khuôn mặt.", "success");
+  }
+
+  async function useRegistrationCamera() {
+    if (state.pendingRegistration) return;
+    state.registrationUpload = null;
+    elements.registerUploadInput.value = "";
+    elements.registerUseCameraButton.hidden = true;
+    hidePreview(elements.registerPreview, "register");
+    await startCamera("register");
   }
 
   async function requestRecognition(image) {
@@ -797,7 +992,8 @@
       setRecognition("idle", "Đang chờ khuôn mặt", "Đặt một hoặc nhiều người vào khung hình để bắt đầu.");
       renderRecognitionFaces([]);
     }
-    if (tabName === "register" || tabName === "recognize") startCamera(tabName);
+    if (tabName === "register" && !state.registrationUpload && !state.pendingRegistration) startCamera(tabName);
+    if (tabName === "recognize" && !state.recognitionUpload) startCamera(tabName);
     if (moveFocus) {
       const heading = tabs[tabName][1].querySelector("h2");
       heading.tabIndex = -1;
@@ -815,6 +1011,18 @@
     });
   });
   elements.registrationForm.addEventListener("submit", registerFace);
+  elements.confirmRegistrationButton.addEventListener("click", confirmRegistration);
+  elements.cancelRegistrationButton.addEventListener("click", cancelRegistration);
+  elements.registerUploadInput.addEventListener("change", async () => {
+    if (state.pendingRegistration) return;
+    await selectRegistrationUpload(elements.registerUploadInput.files[0]);
+  });
+  elements.registerUseCameraButton.addEventListener("click", useRegistrationCamera);
+  elements.recognizeUploadInput.addEventListener("change", async () => {
+    const file = elements.recognizeUploadInput.files[0];
+    if (file) await recognizeUploadedImage(file);
+  });
+  elements.recognizeUseCameraButton.addEventListener("click", useRecognitionCamera);
   elements.adminForm.addEventListener("submit", unlockManagement);
   elements.refreshDataButton.addEventListener("click", loadProfiles);
   elements.calibrateThresholdButton.addEventListener("click", calibrateThreshold);

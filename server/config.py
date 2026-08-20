@@ -27,6 +27,7 @@ class Settings:
     min_face_sharpness: float
     min_face_brightness: float
     max_face_brightness: float
+    pending_registration_ttl_seconds: int
     calibration_max_pairs: int
     max_concurrent_inferences: int
     signing_secret: str
@@ -55,6 +56,9 @@ class Settings:
             min_face_sharpness=float(os.getenv("FACEOPS_MIN_FACE_SHARPNESS", "35")),
             min_face_brightness=float(os.getenv("FACEOPS_MIN_FACE_BRIGHTNESS", "45")),
             max_face_brightness=float(os.getenv("FACEOPS_MAX_FACE_BRIGHTNESS", "220")),
+            pending_registration_ttl_seconds=int(
+                os.getenv("FACEOPS_PENDING_REGISTRATION_TTL_SECONDS", "300")
+            ),
             calibration_max_pairs=int(os.getenv("FACEOPS_CALIBRATION_MAX_PAIRS", "20000")),
             max_concurrent_inferences=int(os.getenv("FACEOPS_MAX_CONCURRENT_INFERENCES", "1")),
             signing_secret=os.getenv("FACEOPS_SIGNING_SECRET", DEVELOPMENT_SECRET),
@@ -86,6 +90,8 @@ class Settings:
             raise RuntimeError("FACEOPS_MIN_FACE_SHARPNESS must be greater than 0.")
         if not 0 <= self.min_face_brightness < self.max_face_brightness <= 255:
             raise RuntimeError("Face brightness limits must be between 0 and 255 in ascending order.")
+        if self.pending_registration_ttl_seconds < 30:
+            raise RuntimeError("FACEOPS_PENDING_REGISTRATION_TTL_SECONDS must be at least 30 seconds.")
         if self.calibration_max_pairs < 2:
             raise RuntimeError("FACEOPS_CALIBRATION_MAX_PAIRS must be at least 2.")
         if self.max_concurrent_inferences < 1:
