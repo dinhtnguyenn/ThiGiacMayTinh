@@ -41,7 +41,7 @@ h2 { font-size: var(--text-lg); font-weight: 700; }
 .crop-editor-hint { position: absolute; inset-inline: var(--space-md); inset-block-start: var(--space-md); z-index: 4; margin: 0; padding: var(--space-xs) var(--space-sm); border: var(--rule) solid rgb(255 255 255 / 0.4); border-radius: var(--radius-sm); background: rgb(18 25 25 / 0.82); color: var(--color-camera-ink); font-size: var(--text-xs); text-align: center; }
 .preview-actions { position: absolute; inset-inline: var(--space-md); inset-block-end: var(--space-md); z-index: 4; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm); }
 .preview-actions .button, .preview-cancel { display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 3.25rem; padding-inline: var(--space-md); font-weight: 700; }
-.preview-cancel { border: var(--rule) solid var(--color-error); background: var(--color-error); box-shadow: 0 0.25rem 0.75rem rgb(123 30 26 / 0.35); color: var(--color-accent-ink); }
+button.text-button.preview-cancel:not(:disabled) { border: var(--rule) solid var(--color-error); background-color: var(--color-error); box-shadow: 0 0.25rem 0.75rem rgb(123 30 26 / 0.35); color: var(--color-accent-ink); opacity: 1; }
 .preview-cancel:focus-visible { outline: 3px solid var(--color-error-paper); outline-offset: 3px; }
 .camera-empty { display: grid; place-content: center; margin: 0; padding: var(--space-lg); color: var(--color-camera-ink); text-align: center; }
 .camera-panel.is-live .camera-empty, .camera-panel.has-preview .camera-empty { display: none; }
