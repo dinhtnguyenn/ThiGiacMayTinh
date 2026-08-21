@@ -711,6 +711,11 @@
     elements.registrationProfilesList.replaceChildren();
     elements.clearRegistrationProfileButton.hidden = !selected;
     elements.personName.readOnly = Boolean(selected);
+    elements.registrationProfilesList.disabled = Boolean(state.pendingRegistration);
+    const newProfileOption = document.createElement("option");
+    newProfileOption.value = "";
+    newProfileOption.textContent = "Đăng ký người mới";
+    elements.registrationProfilesList.append(newProfileOption);
     if (!state.registrationProfiles.length) {
       elements.registrationDirectoryStatus.textContent = "Chưa có hồ sơ nào. Nhập tên để đăng ký người mới.";
       return;
@@ -719,20 +724,12 @@
       ? "Đang thêm mẫu cho " + selected.name + "."
       : "Chọn một người để thêm ảnh mẫu, hoặc nhập tên để đăng ký người mới.";
     state.registrationProfiles.forEach((profile) => {
-      const button = document.createElement("button");
-      button.className = "registration-profile-button";
-      button.type = "button";
-      button.dataset.profileId = profile.id;
-      button.disabled = Boolean(state.pendingRegistration);
-      button.classList.toggle("is-selected", Boolean(selected && profile.id === selected.id));
-      button.setAttribute("aria-pressed", String(Boolean(selected && profile.id === selected.id)));
-      const name = document.createElement("strong");
-      name.textContent = profile.name;
-      const samples = document.createElement("span");
-      samples.textContent = (Number(profile.sample_count) || 0) + " mẫu đã lưu";
-      button.append(name, samples);
-      elements.registrationProfilesList.append(button);
+      const option = document.createElement("option");
+      option.value = profile.id;
+      option.textContent = profile.name + " (" + (Number(profile.sample_count) || 0) + " mẫu)";
+      elements.registrationProfilesList.append(option);
     });
+    elements.registrationProfilesList.value = selected ? selected.id : "";
   }
 
   function selectRegistrationProfile(profileId) {
@@ -1312,9 +1309,9 @@
   elements.registerUseCameraButton.addEventListener("click", useRegistrationCamera);
   elements.refreshRegistrationProfilesButton.addEventListener("click", loadRegistrationProfiles);
   elements.clearRegistrationProfileButton.addEventListener("click", clearSelectedRegistrationProfile);
-  elements.registrationProfilesList.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-profile-id]");
-    if (button) selectRegistrationProfile(button.dataset.profileId);
+  elements.registrationProfilesList.addEventListener("change", (event) => {
+    if (event.target.value) selectRegistrationProfile(event.target.value);
+    else clearSelectedRegistrationProfile();
   });
   elements.recognizeUploadInput.addEventListener("change", async () => {
     const file = elements.recognizeUploadInput.files[0];
