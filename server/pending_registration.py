@@ -20,6 +20,7 @@ class PendingRegistration:
     embedding_dim: int
     quality_score: float
     enrollment_token: str | None
+    profile_id: str | None
     expires_at: int
 
 
@@ -41,6 +42,7 @@ class PendingRegistrationStore:
         embedding_dim: int,
         quality_score: float,
         enrollment_token: str | None,
+        profile_id: str | None = None,
     ) -> PendingRegistration:
         now = int(self._clock())
         pending = PendingRegistration(
@@ -51,6 +53,7 @@ class PendingRegistrationStore:
             embedding_dim=embedding_dim,
             quality_score=quality_score,
             enrollment_token=enrollment_token,
+            profile_id=profile_id,
             expires_at=now + self.ttl_seconds,
         )
         with self._lock:

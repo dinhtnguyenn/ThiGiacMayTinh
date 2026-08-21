@@ -5,7 +5,7 @@ import unittest
 import sqlite3
 from pathlib import Path
 
-from server.database import Database
+from server.database import Database, EnrollmentTargetNotFoundError
 
 
 class DatabaseTests(unittest.TestCase):
@@ -65,12 +65,46 @@ class DatabaseTests(unittest.TestCase):
             database.initialize()
 
             with sqlite3.connect(path) as connection:
-                columns = {row[1] for row in connection.execute("PRAGMA table_info(face_profiles)")}
+                profile_columns = {row[1] for row in connection.execute("PRAGMA table_info(face_profiles)")}
+                sample_columns = {row[1] for row in connection.execute("PRAGMA table_info(face_profile_samples)")}
             profiles = database.profiles_for_public_directory(include_embeddings=True)
-            self.assertIn("enrollment_token_hash", columns)
+            self.assertIn("enrollment_token_hash", profile_columns)
+            self.assertTrue({"face_image", "image_mime_type"}.issubset(sample_columns))
             self.assertEqual(len(profiles), 1)
             self.assertEqual(len(profiles[0].samples), 1)
             self.assertEqual(profiles[0].samples[0].embedding, b"\x01\x02")
+            self.assertIsNone(profiles[0].samples[0].face_image)
+
+    def test_confirmed_face_crop_is_stored_and_loaded_only_for_detail_views(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.create_database(directory)
+            workspace = database.public_workspace()
+
+            enrollment = database.enroll_profile_sample(
+                workspace.id,
+                "Owner",
+                "camera",
+                b"embedding",
+                1,
+                0.9,
+                3,
+                face_image=b"confirmed-crop",
+                image_mime_type="image/jpeg",
+            )
+
+            self.assertIsNotNone(enrollment)
+            assert enrollment is not None
+            public_profile = database.profile_for_workspace(workspace.id, enrollment.profile.id, include_embeddings=False)
+            detail_profile = database.profile_for_workspace(
+                workspace.id,
+                enrollment.profile.id,
+                include_embeddings=False,
+                include_sample_images=True,
+            )
+            assert public_profile is not None and detail_profile is not None
+            self.assertIsNone(public_profile.samples[0].face_image)
+            self.assertEqual(detail_profile.samples[0].face_image, b"confirmed-crop")
+            self.assertEqual(detail_profile.samples[0].image_mime_type, "image/jpeg")
 
     def test_multiple_enrollment_captures_share_one_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -123,6 +157,48 @@ class DatabaseTests(unittest.TestCase):
             profiles = database.profiles_for_public_directory(include_embeddings=True)
             self.assertEqual(len(profiles), 2)
             self.assertEqual({len(profile.samples) for profile in profiles}, {1})
+
+    def test_course_demo_can_add_a_sample_to_the_selected_profile_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.create_database(directory)
+            workspace = database.public_workspace()
+            first = database.enroll_profile_sample(workspace.id, "Owner", "image", b"1111", 1, 0.8, 3)
+            self.assertIsNotNone(first)
+            assert first is not None
+
+            second = database.enroll_profile_sample(
+                workspace.id,
+                "A name sent by the browser is ignored for the selected target",
+                "camera",
+                b"2222",
+                1,
+                0.9,
+                3,
+                profile_id=first.profile.id,
+                face_image=b"second-crop",
+                image_mime_type="image/jpeg",
+            )
+
+            self.assertIsNotNone(second)
+            assert second is not None
+            self.assertFalse(second.created_profile)
+            self.assertEqual(second.profile.id, first.profile.id)
+            self.assertEqual(second.sample_count, 2)
+            profiles = database.profiles_for_public_directory(include_embeddings=True)
+            self.assertEqual(len(profiles), 1)
+            self.assertEqual(len(profiles[0].samples), 2)
+
+    def test_missing_selected_profile_does_not_create_a_duplicate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            database = self.create_database(directory)
+            workspace = database.public_workspace()
+
+            with self.assertRaisesRegex(EnrollmentTargetNotFoundError, "missing-profile"):
+                database.enroll_profile_sample(
+                    workspace.id, "Owner", "image", b"1111", 1, 0.8, 3, profile_id="missing-profile"
+                )
+
+            self.assertEqual(database.profiles_for_public_directory(include_embeddings=True), [])
 
     def test_enrollment_respects_the_sample_limit_without_creating_an_identity(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

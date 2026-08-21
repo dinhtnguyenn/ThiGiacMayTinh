@@ -40,6 +40,19 @@ class PendingRegistrationStoreTests(unittest.TestCase):
         self.assertEqual(self.store.peek(pending.id), pending)
         self.assertEqual(self.store.consume(pending.id), pending)
 
+    def test_selected_profile_id_is_retained_until_confirmation(self) -> None:
+        pending = self.store.create(
+            name="Nguyen Van A",
+            source_mode="camera",
+            embedding=b"embedding",
+            embedding_dim=512,
+            quality_score=0.8,
+            enrollment_token=None,
+            profile_id="profile-123",
+        )
+
+        self.assertEqual(self.store.consume(pending.id).profile_id, "profile-123")
+
     def test_expired_preview_is_not_available_for_confirmation(self) -> None:
         pending = self.create_pending()
         self.now += 60

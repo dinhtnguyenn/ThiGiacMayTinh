@@ -24,6 +24,10 @@
     cameraStatusRecognize: document.getElementById("cameraStatusRecognize"),
     registrationForm: document.getElementById("registrationForm"),
     personName: document.getElementById("personName"),
+    refreshRegistrationProfilesButton: document.getElementById("refreshRegistrationProfilesButton"),
+    registrationDirectoryStatus: document.getElementById("registrationDirectoryStatus"),
+    registrationProfilesList: document.getElementById("registrationProfilesList"),
+    clearRegistrationProfileButton: document.getElementById("clearRegistrationProfileButton"),
     registerButton: document.getElementById("registerButton"),
     registerUploadInput: document.getElementById("registerUploadInput"),
     registerUseCameraButton: document.getElementById("registerUseCameraButton"),
@@ -85,6 +89,8 @@
     latestRecognition: null,
     recognitionTracks: [],
     enrollmentTokens: new Map(),
+    registrationProfiles: [],
+    selectedRegistrationProfile: null,
     pendingRegistration: null,
     registrationUpload: null,
     recognitionUpload: null,
@@ -437,7 +443,7 @@
       drawing.strokeStyle = match ? colorToken("--color-success") : colorToken("--color-accent");
       drawing.fillStyle = drawing.strokeStyle;
       drawing.strokeRect(x, y, boxWidth, boxHeight);
-      const text = match ? labels[index].profile.name : "Khuôn mặt " + (index + 1);
+      const text = match ? recognitionLabel(labels[index]) : "Khuôn mặt " + (index + 1);
       drawing.fillText(text, x + 4, Math.max(14, y - 6));
     });
   }
@@ -675,6 +681,9 @@
     elements.registerUploadInput.disabled = isPending;
     elements.registerUseCameraButton.disabled = isPending;
     elements.registerButton.disabled = isPending;
+    elements.refreshRegistrationProfilesButton.disabled = isPending;
+    elements.clearRegistrationProfileButton.disabled = isPending;
+    renderRegistrationProfiles();
     if (isPending) {
       elements.registerButton.textContent = "Chờ xác nhận";
       elements.registerButton.dataset.state = "pending";
@@ -692,19 +701,92 @@
     setRegistrationPendingState(false);
   }
 
+  function selectedRegistrationProfile() {
+    const selectedId = state.selectedRegistrationProfile && state.selectedRegistrationProfile.id;
+    return state.registrationProfiles.find((profile) => profile.id === selectedId) || state.selectedRegistrationProfile;
+  }
+
+  function renderRegistrationProfiles() {
+    const selected = selectedRegistrationProfile();
+    elements.registrationProfilesList.replaceChildren();
+    elements.clearRegistrationProfileButton.hidden = !selected;
+    elements.personName.readOnly = Boolean(selected);
+    if (!state.registrationProfiles.length) {
+      elements.registrationDirectoryStatus.textContent = "Chưa có hồ sơ nào. Nhập tên để đăng ký người mới.";
+      return;
+    }
+    elements.registrationDirectoryStatus.textContent = selected
+      ? "Đang thêm mẫu cho " + selected.name + "."
+      : "Chọn một người để thêm ảnh mẫu, hoặc nhập tên để đăng ký người mới.";
+    state.registrationProfiles.forEach((profile) => {
+      const button = document.createElement("button");
+      button.className = "registration-profile-button";
+      button.type = "button";
+      button.dataset.profileId = profile.id;
+      button.disabled = Boolean(state.pendingRegistration);
+      button.classList.toggle("is-selected", Boolean(selected && profile.id === selected.id));
+      button.setAttribute("aria-pressed", String(Boolean(selected && profile.id === selected.id)));
+      const name = document.createElement("strong");
+      name.textContent = profile.name;
+      const samples = document.createElement("span");
+      samples.textContent = (Number(profile.sample_count) || 0) + " mẫu đã lưu";
+      button.append(name, samples);
+      elements.registrationProfilesList.append(button);
+    });
+  }
+
+  function selectRegistrationProfile(profileId) {
+    if (state.pendingRegistration) return;
+    const profile = state.registrationProfiles.find((item) => item.id === profileId);
+    if (!profile) return;
+    state.selectedRegistrationProfile = profile;
+    elements.personName.value = profile.name;
+    setMessage(elements.registrationMessage, "Đã chọn " + profile.name + ". Ảnh xác nhận tiếp theo sẽ được thêm vào hồ sơ này.", "success");
+    renderRegistrationProfiles();
+  }
+
+  function clearSelectedRegistrationProfile() {
+    if (state.pendingRegistration) return;
+    state.selectedRegistrationProfile = null;
+    elements.personName.value = "";
+    setMessage(elements.registrationMessage);
+    renderRegistrationProfiles();
+    elements.personName.focus();
+  }
+
+  async function loadRegistrationProfiles() {
+    elements.registrationDirectoryStatus.textContent = "Đang tải danh sách...";
+    try {
+      const payload = await apiFetch("/api/registration-profiles", { cache: "no-store" });
+      state.registrationProfiles = Array.isArray(payload.profiles) ? payload.profiles : [];
+      const selectedId = state.selectedRegistrationProfile && state.selectedRegistrationProfile.id;
+      state.selectedRegistrationProfile = state.registrationProfiles.find((profile) => profile.id === selectedId) || null;
+      if (state.selectedRegistrationProfile) elements.personName.value = state.selectedRegistrationProfile.name;
+      renderRegistrationProfiles();
+    } catch (error) {
+      elements.registrationDirectoryStatus.textContent = "Không tải được danh sách: " + errorMessage(error);
+    }
+  }
+
   function renderRecognitionFaces(faces) {
     elements.recognitionFaces.replaceChildren();
     faces.forEach((face, index) => {
       const item = document.createElement("li");
       item.dataset.state = face.matched ? "match" : face.pending ? "pending" : "empty";
       const label = face.matched && face.profile
-        ? face.profile.name
+        ? recognitionLabel(face)
         : face.pending && face.profile
-          ? "Đang xác nhận: " + face.profile.name + " (" + face.confirmationCount + "/" + REQUIRED_RECOGNITION_CONFIRMATIONS + ")"
+          ? "Đang xác nhận: " + recognitionLabel(face) + " (" + face.confirmationCount + "/" + REQUIRED_RECOGNITION_CONFIRMATIONS + ")"
           : "Chưa có dữ liệu";
       item.textContent = "Người " + (index + 1) + ": " + label;
       elements.recognitionFaces.append(item);
     });
+  }
+
+  function recognitionLabel(face) {
+    const similarity = Number(face && face.similarity);
+    const score = Number.isFinite(similarity) ? similarity.toFixed(2) : "--";
+    return face.profile.name + " - " + score;
   }
 
   function setRecognition(stateName, title, detail) {
@@ -736,8 +818,13 @@
       form.append("consent", "true");
       form.append("source_mode", uploadedImage ? "upload" : "camera");
       form.append("image", image, image.name);
-      const enrollmentToken = state.enrollmentTokens.get(enrollmentKey(name));
-      if (enrollmentToken) form.append("enrollment_token", enrollmentToken);
+      const selectedProfile = selectedRegistrationProfile();
+      if (selectedProfile) {
+        form.append("profile_id", selectedProfile.id);
+      } else {
+        const enrollmentToken = state.enrollmentTokens.get(enrollmentKey(name));
+        if (enrollmentToken) form.append("enrollment_token", enrollmentToken);
+      }
       const payload = await apiFetch("/api/registrations/preview", { method: "POST", body: form });
       const pending = payload.pending_registration;
       if (!pending || !pending.id || typeof payload.preview_image !== "string") {
@@ -781,11 +868,19 @@
       const maxSamples = Number(enrollment.max_samples) || sampleCount;
       const profileName = payload.profile && payload.profile.name ? payload.profile.name : pending.name;
       const wasUploaded = pending.source_mode === "upload";
-      elements.personName.value = "";
+      const savedProfile = payload.profile && payload.profile.id ? payload.profile : null;
+      if (state.selectedRegistrationProfile && savedProfile && state.selectedRegistrationProfile.id === savedProfile.id) {
+        state.selectedRegistrationProfile = { ...state.selectedRegistrationProfile, ...savedProfile, sample_count: sampleCount };
+        elements.personName.value = state.selectedRegistrationProfile.name;
+      } else {
+        elements.personName.value = "";
+      }
       state.registrationUpload = null;
       elements.registerUploadInput.value = "";
       elements.registerUseCameraButton.hidden = !wasUploaded;
       clearRegistrationPreview();
+      renderRegistrationProfiles();
+      void loadRegistrationProfiles();
       setMessage(
         elements.registrationMessage,
         (enrollment.created_profile ? "Đăng ký thành công: " : "Đã thêm mẫu khuôn mặt cho ")
@@ -1054,12 +1149,12 @@
     clearDetails();
     const profile = payload.profile || {};
     const samples = Array.isArray(payload.samples) ? payload.samples : [];
-    elements.detailsProfileSummary.textContent = profile.name + " · " + samples.length + " mẫu embedding";
+    elements.detailsProfileSummary.textContent = profile.name + " · " + samples.length + " mẫu khuôn mặt";
     addDetailField("Mã hồ sơ", profile.id || "Không xác định");
     addDetailField("Đăng ký", displayDate(profile.created_at));
     addDetailField("Nguồn", profile.source_mode || "Không xác định");
-    addDetailField("Kiểu lưu", "Embedding float32 trên server");
-    const imageStorage = payload.raw_image_storage || {};
+    addDetailField("Kiểu lưu", "Ảnh khuôn mặt crop đã xác nhận trên server");
+    const imageStorage = payload.face_image_storage || {};
     elements.detailsImageStorage.textContent = imageStorage.message || "Không có thông tin lưu ảnh.";
     samples.forEach((sample, index) => {
       const section = document.createElement("article");
@@ -1068,24 +1163,27 @@
       heading.textContent = "Mẫu " + (index + 1);
       const metadata = document.createElement("p");
       const quality = typeof sample.quality_score === "number" ? sample.quality_score.toFixed(3) : "Chưa có (mẫu cũ)";
-      metadata.textContent = "Mã mẫu: " + sample.id + " · " + displayDate(sample.created_at) + " · chất lượng: " + quality + " · " + sample.embedding_dimension + " chiều";
-      const vectorLabel = document.createElement("label");
-      const vectorId = "embeddingVector" + index;
-      vectorLabel.htmlFor = vectorId;
-      vectorLabel.textContent = "Vector embedding đầy đủ (float32)";
-      const vector = document.createElement("textarea");
-      vector.id = vectorId;
-      vector.className = "embedding-vector";
-      vector.readOnly = true;
-      vector.rows = 8;
-      vector.spellcheck = false;
-      vector.value = JSON.stringify(Array.isArray(sample.embedding_vector) ? sample.embedding_vector : []);
+      metadata.textContent = "Mã mẫu: " + sample.id + " · " + displayDate(sample.created_at) + " · chất lượng: " + quality;
+      let faceVisual;
+      if (typeof sample.face_image === "string") {
+        const image = document.createElement("img");
+        image.className = "stored-face-image";
+        image.alt = "Ảnh khuôn mặt crop của " + profile.name + ", mẫu " + (index + 1);
+        image.loading = "lazy";
+        image.src = sample.face_image;
+        faceVisual = image;
+      } else {
+        const unavailable = document.createElement("p");
+        unavailable.className = "stored-face-image-unavailable";
+        unavailable.textContent = "Mẫu cũ chưa có ảnh khuôn mặt được lưu.";
+        faceVisual = unavailable;
+      }
       const removeButton = document.createElement("button");
       removeButton.className = "table-button";
       removeButton.type = "button";
       removeButton.textContent = "Xóa mẫu này";
       removeButton.addEventListener("click", () => deleteProfileSample(profile.id, sample.id));
-      section.append(heading, metadata, vectorLabel, vector, removeButton);
+      section.append(heading, metadata, faceVisual, removeButton);
       elements.detailsSamples.append(section);
     });
   }
@@ -1104,7 +1202,7 @@
   }
 
   async function deleteProfileSample(profileId, sampleId) {
-    if (!window.confirm("Xóa mẫu embedding này? Không thể hoàn tác.")) return;
+    if (!window.confirm("Xóa mẫu khuôn mặt này? Không thể hoàn tác.")) return;
     try {
       await apiFetch(
         "/api/profiles/" + encodeURIComponent(profileId) + "/samples/" + encodeURIComponent(sampleId),
@@ -1178,7 +1276,10 @@
       setRecognition("idle", "Đang chờ khuôn mặt", "Đặt một hoặc nhiều người vào khung hình để bắt đầu.");
       renderRecognitionFaces([]);
     }
-    if (tabName === "register" && !state.registrationUpload && !state.pendingRegistration) startCamera(tabName);
+    if (tabName === "register") {
+      void loadRegistrationProfiles();
+      if (!state.registrationUpload && !state.pendingRegistration) startCamera(tabName);
+    }
     if (tabName === "recognize" && !state.recognitionUpload) startCamera(tabName);
     if (moveFocus) {
       const heading = tabs[tabName][1].querySelector("h2");
@@ -1209,6 +1310,12 @@
     await selectRegistrationUpload(elements.registerUploadInput.files[0]);
   });
   elements.registerUseCameraButton.addEventListener("click", useRegistrationCamera);
+  elements.refreshRegistrationProfilesButton.addEventListener("click", loadRegistrationProfiles);
+  elements.clearRegistrationProfileButton.addEventListener("click", clearSelectedRegistrationProfile);
+  elements.registrationProfilesList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-profile-id]");
+    if (button) selectRegistrationProfile(button.dataset.profileId);
+  });
   elements.recognizeUploadInput.addEventListener("change", async () => {
     const file = elements.recognizeUploadInput.files[0];
     if (file) await recognizeUploadedImage(file);

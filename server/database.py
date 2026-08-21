@@ -43,7 +43,7 @@ class StoredProfile:
 
 @dataclass(frozen=True)
 class StoredProfileSample:
-    """One capture used to make an identity more tolerant of real conditions."""
+    """One capture and its confirmed face crop used for an identity."""
 
     id: str
     profile_id: str
@@ -52,6 +52,8 @@ class StoredProfileSample:
     embedding: bytes
     embedding_dim: int
     quality_score: float | None
+    face_image: bytes | None = None
+    image_mime_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,10 @@ class EnrollmentResult:
     sample_count: int
     created_profile: bool
     enrollment_token: str | None
+
+
+class EnrollmentTargetNotFoundError(Exception):
+    """Raised when a requested existing profile no longer belongs to the directory."""
 
 
 SCHEMA = """
@@ -101,6 +107,8 @@ CREATE TABLE IF NOT EXISTS face_profile_samples (
   embedding BLOB NOT NULL,
   embedding_dim INTEGER NOT NULL,
   quality_score REAL,
+  face_image BLOB,
+  image_mime_type TEXT,
   created_at INTEGER NOT NULL
 );
 
@@ -121,6 +129,7 @@ class Database:
         with self.connection() as connection:
             connection.executescript(SCHEMA)
             self._ensure_profile_enrollment_token_column(connection)
+            self._ensure_sample_image_columns(connection)
             now = int(time.time())
             self._ensure_public_directory(connection, now)
             self._migrate_to_public_directory(connection)
@@ -164,6 +173,16 @@ class Database:
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(face_profiles)")}
         if "enrollment_token_hash" not in columns:
             connection.execute("ALTER TABLE face_profiles ADD COLUMN enrollment_token_hash TEXT")
+
+    @staticmethod
+    def _ensure_sample_image_columns(connection: sqlite3.Connection) -> None:
+        """Add confirmed crop storage to existing deployments without rebuilding SQLite."""
+
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(face_profile_samples)")}
+        if "face_image" not in columns:
+            connection.execute("ALTER TABLE face_profile_samples ADD COLUMN face_image BLOB")
+        if "image_mime_type" not in columns:
+            connection.execute("ALTER TABLE face_profile_samples ADD COLUMN image_mime_type TEXT")
 
     def _prune_expired(self, connection: sqlite3.Connection, now: int) -> None:
         connection.execute("DELETE FROM liveness_challenges WHERE expires_at <= ?", (now,))
@@ -234,12 +253,18 @@ class Database:
         workspace_id: str,
         profile_id: str,
         include_embeddings: bool,
+        include_sample_images: bool = False,
     ) -> StoredProfile | None:
         """Return one profile including samples only for an authorized caller."""
 
         return next(
             (
-                profile for profile in self.profiles_for_workspace(workspace_id, include_embeddings)
+                profile
+                for profile in self.profiles_for_workspace(
+                    workspace_id,
+                    include_embeddings,
+                    include_sample_images,
+                )
                 if profile.id == profile_id
             ),
             None,
@@ -332,6 +357,8 @@ class Database:
         embedding_dim: int,
         quality_score: float | None,
         created_at: int,
+        face_image: bytes | None = None,
+        image_mime_type: str | None = None,
     ) -> StoredProfileSample:
         sample = StoredProfileSample(
             id=str(uuid.uuid4()),
@@ -341,12 +368,14 @@ class Database:
             embedding_dim=embedding_dim,
             quality_score=quality_score,
             created_at=created_at,
+            face_image=face_image,
+            image_mime_type=image_mime_type,
         )
         connection.execute(
             """
             INSERT INTO face_profile_samples
-              (id, profile_id, source_mode, embedding, embedding_dim, quality_score, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+              (id, profile_id, source_mode, embedding, embedding_dim, quality_score, face_image, image_mime_type, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 sample.id,
@@ -355,6 +384,8 @@ class Database:
                 sample.embedding,
                 sample.embedding_dim,
                 sample.quality_score,
+                sample.face_image,
+                sample.image_mime_type,
                 sample.created_at,
             ),
         )
@@ -370,36 +401,52 @@ class Database:
         quality_score: float,
         max_samples: int,
         enrollment_token: str | None = None,
+        profile_id: str | None = None,
+        face_image: bytes | None = None,
+        image_mime_type: str | None = None,
     ) -> EnrollmentResult | None:
         """Create an identity or add a distinct capture to its existing identity.
 
         A name alone never authorizes adding a capture to an existing identity.
-        The caller must present the session-held continuation secret
-        returned during its first enrollment. This prevents a public visitor from
-        poisoning another person's directory record by typing their name.
+        The normal flow requires the session-held continuation secret returned
+        during first enrollment. The course-demo selector may instead provide a
+        stable profile ID after the public API has validated the selected target.
         """
 
         now = int(time.time())
         with self.connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT id, name, source_mode, embedding, embedding_dim, enrollment_token_hash, created_at
-                FROM face_profiles WHERE workspace_id = ? ORDER BY created_at ASC
-                """,
-                (workspace_id,),
-            ).fetchall()
-            supplied_token_hash = (
-                token_digest(enrollment_token, self.signing_secret) if enrollment_token else None
-            )
-            row = next(
-                (
-                    item for item in rows
-                    if item["name"].casefold() == name.casefold()
-                    and supplied_token_hash
-                    and item["enrollment_token_hash"] == supplied_token_hash
-                ),
-                None,
-            )
+            if profile_id:
+                # The demo selector already provides an exact ID; avoid loading every
+                # profile's embedding just to append one sample.
+                row = connection.execute(
+                    """
+                    SELECT id, name, source_mode, embedding, embedding_dim, enrollment_token_hash, created_at
+                    FROM face_profiles WHERE workspace_id = ? AND id = ?
+                    """,
+                    (workspace_id, profile_id),
+                ).fetchone()
+                if row is None:
+                    raise EnrollmentTargetNotFoundError(profile_id)
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT id, name, source_mode, embedding, embedding_dim, enrollment_token_hash, created_at
+                    FROM face_profiles WHERE workspace_id = ? ORDER BY created_at ASC
+                    """,
+                    (workspace_id,),
+                ).fetchall()
+                supplied_token_hash = (
+                    token_digest(enrollment_token, self.signing_secret) if enrollment_token else None
+                )
+                row = next(
+                    (
+                        item for item in rows
+                        if item["name"].casefold() == name.casefold()
+                        and supplied_token_hash
+                        and item["enrollment_token_hash"] == supplied_token_hash
+                    ),
+                    None,
+                )
             created_profile = row is None
             issued_token: str | None = None
             if row is None:
@@ -452,6 +499,8 @@ class Database:
                 embedding_dim,
                 quality_score,
                 now,
+                face_image,
+                image_mime_type,
             )
         return EnrollmentResult(
             profile=StoredProfile(**{**profile.__dict__, "samples": (sample,)}),
@@ -460,7 +509,12 @@ class Database:
             enrollment_token=issued_token,
         )
 
-    def profiles_for_workspace(self, workspace_id: str, include_embeddings: bool) -> list[StoredProfile]:
+    def profiles_for_workspace(
+        self,
+        workspace_id: str,
+        include_embeddings: bool,
+        include_sample_images: bool = False,
+    ) -> list[StoredProfile]:
         fields = "id, name, source_mode, created_at, embedding, embedding_dim" if include_embeddings else "id, name, source_mode, created_at, X'' AS embedding, 0 AS embedding_dim"
         with self.connection() as connection:
             rows = connection.execute(
@@ -468,11 +522,9 @@ class Database:
                 (workspace_id,),
             ).fetchall()
             profile_ids = [row["id"] for row in rows]
-            sample_fields = (
-                "id, profile_id, source_mode, embedding, embedding_dim, quality_score, created_at"
-                if include_embeddings
-                else "id, profile_id, source_mode, X'' AS embedding, 0 AS embedding_dim, quality_score, created_at"
-            )
+            embedding_fields = "embedding, embedding_dim" if include_embeddings else "X'' AS embedding, 0 AS embedding_dim"
+            image_fields = "face_image, image_mime_type" if include_sample_images else "NULL AS face_image, NULL AS image_mime_type"
+            sample_fields = f"id, profile_id, source_mode, {embedding_fields}, quality_score, {image_fields}, created_at"
             sample_rows = connection.execute(
                 f"SELECT {sample_fields} FROM face_profile_samples "
                 f"WHERE profile_id IN ({','.join('?' for _ in profile_ids)}) ORDER BY created_at ASC",
@@ -489,6 +541,8 @@ class Database:
                     embedding_dim=row["embedding_dim"],
                     quality_score=row["quality_score"],
                     created_at=row["created_at"],
+                    face_image=bytes(row["face_image"]) if row["face_image"] is not None else None,
+                    image_mime_type=row["image_mime_type"],
                 )
             )
         return [

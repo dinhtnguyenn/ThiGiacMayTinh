@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from .calibration import threshold_report
 from .config import Settings
-from .database import Database, StoredProfile, Workspace
+from .database import Database, EnrollmentTargetNotFoundError, StoredProfile, Workspace
 from .face_service import (
     FaceAnalysisError,
     FaceAnalysisTrace,
@@ -208,13 +208,18 @@ def pending_registration_payload(pending) -> dict[str, object]:
 
 
 def profile_detail_payload(profile: StoredProfile) -> dict[str, object]:
-    """Serialize the sensitive template only for the administrator-only endpoint."""
+    """Serialize consented sample images only for the administrator-only endpoint."""
+
+    stored_image_count = sum(1 for sample in profile.samples if sample.face_image)
 
     return {
         "profile": profile_payload(profile),
-        "raw_image_storage": {
-            "stored": False,
-            "message": "Ảnh gốc không được lưu trên server; chỉ embedding float32 được lưu.",
+        "face_image_storage": {
+            "stored_count": stored_image_count,
+            "message": (
+                f"Đang lưu {stored_image_count}/{len(profile.samples)} ảnh khuôn mặt crop đã xác nhận. "
+                "Ảnh gốc từ camera hoặc upload không được lưu."
+            ),
         },
         "samples": [
             {
@@ -222,8 +227,12 @@ def profile_detail_payload(profile: StoredProfile) -> dict[str, object]:
                 "source_mode": sample.source_mode,
                 "created_at": as_iso(sample.created_at),
                 "quality_score": round(sample.quality_score, 3) if sample.quality_score is not None else None,
-                "embedding_dimension": sample.embedding_dim,
-                "embedding_vector": np.frombuffer(sample.embedding, dtype=np.float32).tolist(),
+                "face_image": (
+                    "data:" + (sample.image_mime_type or "image/jpeg") + ";base64,"
+                    + base64.b64encode(sample.face_image).decode("ascii")
+                    if sample.face_image
+                    else None
+                ),
             }
             for sample in profile.samples
         ],
@@ -294,6 +303,24 @@ async def list_profiles(
     }
 
 
+@app.get("/api/registration-profiles")
+async def list_registration_profiles() -> dict[str, object]:
+    """Expose a minimal course-demo selector, never sample images or embeddings."""
+
+    profiles = database.profiles_for_public_directory(include_embeddings=False)
+    return {
+        "profile_count": len(profiles),
+        "profiles": [
+            {
+                "id": profile.id,
+                "name": profile.name,
+                "sample_count": len(profile.samples),
+            }
+            for profile in profiles
+        ],
+    }
+
+
 @app.get("/api/calibration")
 async def calibration_report(
     _: Annotated[None, Depends(require_admin)],
@@ -312,7 +339,12 @@ async def get_profile_details(
     """Expose biometric template diagnostics to the authenticated administrator only."""
 
     workspace = database.public_workspace()
-    profile = database.profile_for_workspace(workspace.id, profile_id, include_embeddings=True)
+    profile = database.profile_for_workspace(
+        workspace.id,
+        profile_id,
+        include_embeddings=False,
+        include_sample_images=True,
+    )
     if not profile:
         api_error(404, "profile_not_found", "Hồ sơ không tồn tại.")
     return profile_detail_payload(profile)
@@ -371,6 +403,7 @@ async def create_registration_preview(
     image: Annotated[UploadFile, File()],
     source_mode: Annotated[str, Form()] = "camera",
     enrollment_token: Annotated[str | None, Form()] = None,
+    profile_id: Annotated[str | None, Form()] = None,
 ) -> dict[str, object]:
     request_started = time.perf_counter()
     if not consent:
@@ -378,6 +411,19 @@ async def create_registration_preview(
     clean_name = " ".join(name.split())
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
+    selected_profile_id = profile_id.strip() if profile_id else None
+    if selected_profile_id:
+        workspace = database.public_workspace()
+        selected_profile = database.profile_for_workspace(
+            workspace.id,
+            selected_profile_id,
+            include_embeddings=False,
+        )
+        if not selected_profile:
+            api_error(404, "profile_not_found", "Hồ sơ đã chọn không còn tồn tại. Hãy tải lại danh sách.")
+        # A stable selected ID, not an editable name, determines the target profile.
+        clean_name = selected_profile.name
+        enrollment_token = None
     if source_mode not in {"camera", "upload"}:
         api_error(422, "invalid_source_mode", "Nguồn ảnh đăng ký không hợp lệ.")
     observation, processing_steps, analysis_trace, image_bytes = await analyze_image(image)
@@ -407,6 +453,7 @@ async def create_registration_preview(
         embedding_dim=int(observation.embedding.size),
         quality_score=quality.score,
         enrollment_token=enrollment_token,
+        profile_id=selected_profile_id,
     )
     processing_steps.append(
         trace_step(
@@ -448,8 +495,9 @@ async def confirm_registration(
     embedding: bytes | None = None
     embedding_dim: int | None = None
     quality_score: float | None = None
+    face_image: bytes | None = None
     if image is not None:
-        observation, crop_steps, _, _ = await analyze_image(image)
+        observation, crop_steps, _, image_bytes = await analyze_image(image)
         try:
             quality = validate_enrollment_quality(
                 observation,
@@ -464,24 +512,36 @@ async def confirm_registration(
         embedding = observation.embedding.astype(np.float32).tobytes()
         embedding_dim = int(observation.embedding.size)
         quality_score = quality.score
+        try:
+            face_image = await run_in_threadpool(face_service.crop_face_preview, image_bytes, observation)
+        except FaceAnalysisError as error:
+            api_error(422, error.code, error.message)
+        except RuntimeError:
+            api_error(503, "preview_unavailable", "Không thể tạo ảnh crop để lưu. Hãy thử lại sau.")
         processing_steps.extend(crop_steps)
-        processing_steps.append(trace_step("Server", "Đã kiểm tra crop đã điều chỉnh trước khi lưu."))
+        processing_steps.append(trace_step("Server", "Đã kiểm tra và tạo ảnh crop đã điều chỉnh trước khi lưu."))
 
     pending = pending_registrations.consume(pending_id)
     if not pending:
         api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
     workspace = database.public_workspace()
     storage_started = time.perf_counter()
-    enrollment = database.enroll_profile_sample(
-        workspace.id,
-        pending.name,
-        pending.source_mode,
-        embedding if embedding is not None else pending.embedding,
-        embedding_dim if embedding_dim is not None else pending.embedding_dim,
-        quality_score if quality_score is not None else pending.quality_score,
-        settings.max_samples_per_profile,
-        pending.enrollment_token,
-    )
+    try:
+        enrollment = database.enroll_profile_sample(
+            workspace.id,
+            pending.name,
+            pending.source_mode,
+            embedding if embedding is not None else pending.embedding,
+            embedding_dim if embedding_dim is not None else pending.embedding_dim,
+            quality_score if quality_score is not None else pending.quality_score,
+            settings.max_samples_per_profile,
+            pending.enrollment_token,
+            profile_id=pending.profile_id,
+            face_image=face_image,
+            image_mime_type="image/jpeg" if face_image else None,
+        )
+    except EnrollmentTargetNotFoundError:
+        api_error(404, "profile_not_found", "Hồ sơ đã chọn không còn tồn tại. Hãy tải lại danh sách.")
     if enrollment is None:
         api_error(
             409,

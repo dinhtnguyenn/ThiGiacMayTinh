@@ -238,6 +238,14 @@ class InsightFaceService:
         crop = image[top:bottom, left:right]
         if crop.size == 0:
             raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        max_dimension = 960
+        if max(crop.shape[:2]) > max_dimension:
+            scale = max_dimension / max(crop.shape[:2])
+            crop = cv2.resize(
+                crop,
+                (round(crop.shape[1] * scale), round(crop.shape[0] * scale)),
+                interpolation=cv2.INTER_AREA,
+            )
         encoded, preview = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
         if not encoded:
             raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")

@@ -2,7 +2,7 @@
 /* Hallmark · macrostructure: Catalogue · tone: utilitarian face-directory controls · anchor hue: coral · theme: Coral · enrichment: none · nav: three functional tabs · footer: omitted by product scope */
 
 * { box-sizing: border-box; }
-html, body { overflow-x: clip; }
+html, body { max-width: 100%; overflow-x: hidden; }
 body { min-width: 0; margin: 0; background: var(--color-paper); color: var(--color-ink); font-family: var(--font-body); font-size: var(--text-base); line-height: 1.5; }
 button, input { font: inherit; }
 button { cursor: pointer; }
@@ -20,15 +20,15 @@ h2 { font-size: var(--text-lg); font-weight: 700; }
 .tab.is-active { background: var(--color-ink); color: var(--color-accent-ink); }
 .tab:focus-visible, .button:focus-visible, .text-button:focus-visible, .table-button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
 
-.tab-content { margin-block-start: var(--space-lg); }
-.view { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(20rem, 0.9fr); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-md); overflow: hidden; }
-.camera-panel { position: relative; display: grid; min-width: 0; min-height: 28rem; overflow: hidden; background: var(--color-camera); }
+.tab-content { min-width: 0; margin-block-start: var(--space-lg); }
+.view { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(20rem, 0.9fr); max-width: 100%; border: var(--rule) solid var(--color-rule); border-radius: var(--radius-md); overflow: clip; }
+.camera-panel { position: relative; display: grid; min-width: 0; min-height: 28rem; overflow: clip; isolation: isolate; contain: paint; background: var(--color-camera); }
 .camera-panel video, .face-tracking { position: absolute; inset: 0; display: none; width: 100%; height: 100%; object-fit: cover; }
 .camera-panel.is-live video, .camera-panel.is-live .face-tracking { display: block; }
 .camera-panel.has-upload .face-tracking { z-index: 1; display: block; }
-.crop-editor { position: absolute; inset: 0; z-index: 2; overflow: hidden; }
+.crop-editor { position: absolute; inset: 0; z-index: 2; overflow: clip; }
 .capture-preview { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; background: var(--color-camera); }
-.crop-selection { position: absolute; z-index: 1; min-width: 3rem; min-height: 3rem; border: 2px solid var(--color-accent); box-shadow: 0 0 0 9999px rgb(18 25 25 / 0.62); cursor: move; touch-action: none; }
+.crop-selection { position: absolute; z-index: 1; min-width: 3rem; min-height: 3rem; border: 2px solid var(--color-accent); background: rgb(18 25 25 / 0.08); cursor: move; touch-action: none; }
 .crop-selection:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 3px; }
 .crop-selection-label { position: absolute; inset-inline-start: -2px; inset-block-start: -1.75rem; padding: 0.15rem 0.4rem; background: var(--color-accent); color: var(--color-accent-ink); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 500; white-space: nowrap; }
 .crop-handle { position: absolute; width: 1rem; height: 1rem; border: 2px solid var(--color-accent-ink); border-radius: 50%; background: var(--color-accent); }
@@ -37,13 +37,13 @@ h2 { font-size: var(--text-lg); font-weight: 700; }
 .crop-handle-sw { inset-inline-start: -0.55rem; inset-block-end: -0.55rem; cursor: nesw-resize; }
 .crop-handle-se { inset-inline-end: -0.55rem; inset-block-end: -0.55rem; cursor: nwse-resize; }
 .crop-editor-hint { position: absolute; inset-inline: var(--space-md); inset-block-start: var(--space-md); z-index: 4; margin: 0; padding: var(--space-xs) var(--space-sm); border: var(--rule) solid rgb(255 255 255 / 0.4); border-radius: var(--radius-sm); background: rgb(18 25 25 / 0.82); color: var(--color-camera-ink); font-size: var(--text-xs); text-align: center; }
-.preview-actions { position: absolute; inset-inline: var(--space-md); inset-block-end: var(--space-md); z-index: 4; display: flex; justify-content: center; gap: var(--space-sm); }
-.preview-actions .button { min-width: 8rem; }
-.preview-cancel { min-height: 3rem; padding-inline: var(--space-md); background: var(--color-paper); color: var(--color-ink); }
+.preview-actions { position: absolute; inset-inline: var(--space-md); inset-block-end: var(--space-md); z-index: 4; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-sm); }
+.preview-actions .button, .preview-cancel { display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 3.25rem; padding-inline: var(--space-md); font-weight: 700; }
+.preview-cancel { border: var(--rule) solid var(--color-error); background: var(--color-error-paper); color: var(--color-error); }
 .camera-empty { display: grid; place-content: center; margin: 0; padding: var(--space-lg); color: var(--color-camera-ink); text-align: center; }
 .camera-panel.is-live .camera-empty, .camera-panel.has-preview .camera-empty { display: none; }
 .camera-status { position: absolute; inset-inline: var(--space-md); inset-block-end: var(--space-md); z-index: 5; margin: 0; color: var(--color-camera-ink); font-family: var(--font-mono); font-size: var(--text-xs); text-align: center; }
-#cameraPanelRegister.has-preview .camera-status { inset-block-end: calc(var(--space-md) + 3rem + var(--space-sm)); }
+#cameraPanelRegister.has-preview .camera-status { inset-block-end: calc(var(--space-md) + 3.25rem + var(--space-sm)); }
 .camera-status[data-state="success"] { color: var(--color-success-paper); }
 .camera-status[data-state="error"] { color: var(--color-error-paper); }
 
@@ -70,6 +70,17 @@ input:focus-visible { border-color: var(--color-accent); outline: 2px solid var(
 .processing ol { display: grid; gap: var(--space-2xs); margin: var(--space-sm) 0 0; padding-inline-start: var(--space-lg); }
 .processing p { margin: var(--space-sm) 0 0; }
 .capture-options { display: flex; align-items: center; gap: var(--space-sm); }
+.registration-directory { display: grid; gap: var(--space-xs); padding: var(--space-sm); border: var(--rule) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper-2); }
+.registration-directory-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-sm); }
+.registration-directory h3 { margin: 0; font-size: var(--text-sm); }
+.registration-profile-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr)); gap: var(--space-xs); max-height: 12rem; overflow: auto; padding: 1px; }
+.registration-profile-button { display: grid; gap: 0.1rem; min-width: 0; min-height: 3.25rem; border: var(--rule) solid var(--color-rule-strong); border-radius: var(--radius-sm); padding: var(--space-sm); background: var(--color-paper); color: var(--color-ink); text-align: left; }
+.registration-profile-button strong, .registration-profile-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.registration-profile-button span { color: var(--color-muted); font-size: var(--text-xs); }
+.registration-profile-button.is-selected { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-accent-ink); }
+.registration-profile-button.is-selected span { color: var(--color-accent-ink); }
+.registration-profile-button:focus-visible { outline: 3px solid var(--color-focus); outline-offset: 2px; }
+.registration-profile-button:disabled { cursor: wait; opacity: 0.65; }
 .file-button { display: inline-flex; align-items: center; min-height: 2.5rem; border: var(--rule) solid var(--color-rule-strong); border-radius: var(--radius-sm); padding-inline: var(--space-sm); color: var(--color-ink-2); cursor: pointer; font-size: var(--text-sm); }
 .file-button:hover { background: var(--color-paper-2); color: var(--color-ink); }
 .file-button input { position: absolute; width: 1px; min-height: 1px; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; }
@@ -112,12 +123,14 @@ dialog form { display: grid; gap: var(--space-sm); padding: var(--space-xl); }
 .detail-sample h3, .detail-sample p { margin: 0; }
 .detail-sample h3 { font-size: var(--text-md); }
 .detail-sample p, .detail-sample label { color: var(--color-muted); font-size: var(--text-xs); }
-.embedding-vector { min-height: 9rem; resize: vertical; border: var(--rule) solid var(--color-rule); border-radius: var(--radius-sm); padding: var(--space-sm); background: var(--color-paper-3); color: var(--color-ink-2); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 1.55; }
+.stored-face-image { display: block; width: min(100%, 18rem); max-height: 18rem; border: var(--rule) solid var(--color-rule); border-radius: var(--radius-sm); background: var(--color-paper-3); object-fit: contain; }
+.stored-face-image-unavailable { width: min(100%, 18rem); margin: 0; padding: var(--space-md); border: var(--rule) dashed var(--color-rule-strong); border-radius: var(--radius-sm); background: var(--color-paper-3); color: var(--color-muted); font-size: var(--text-sm); }
 
 @media (hover: hover) and (pointer: fine) {
   .tab:hover:not(.is-active) { background: var(--color-paper-2); color: var(--color-ink); }
   .button:hover:not(:disabled) { background: var(--color-accent); border-color: var(--color-accent); transform: translateY(-1px); }
   .text-button:hover, .table-button:hover { background: var(--color-paper-2); color: var(--color-ink); }
+  .preview-cancel:hover:not(:disabled) { border-color: var(--color-error); background: var(--color-error); color: var(--color-accent-ink); }
 }
 .button:active, .text-button:active, .table-button:active { transform: translateY(1px); }
 
@@ -129,10 +142,10 @@ dialog form { display: grid; gap: var(--space-sm); padding: var(--space-xl); }
   .admin-row { display: grid; grid-template-columns: minmax(0, 1fr); }
   .button { width: 100%; }
   .capture-options { align-items: stretch; flex-direction: column; }
+  .registration-directory-head { align-items: flex-start; }
+  .registration-profile-list { grid-template-columns: minmax(0, 1fr); }
   .file-button { justify-content: center; }
-  .preview-actions { align-items: stretch; flex-direction: column; }
-  .preview-actions .button { width: 100%; }
-  #cameraPanelRegister.has-preview .camera-status { inset-block-end: calc(var(--space-md) + 6.5rem + var(--space-sm)); }
+  .preview-actions { gap: var(--space-xs); }
   .manage-head { align-items: flex-start; }
   .detail-dialog { padding: var(--space-lg); }
   .detail-list { grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); }

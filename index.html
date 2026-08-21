@@ -48,6 +48,15 @@
             <p class="file-status">Đặt một khuôn mặt rõ nét trước camera. Hệ thống sẽ lưu embedding InsightFace trên server.</p>
             <label for="personName">Họ và tên</label>
             <input id="personName" type="text" autocomplete="name" placeholder="Nguyen Van A" minlength="2" required />
+            <section class="registration-directory" aria-labelledby="registrationDirectoryTitle">
+              <div class="registration-directory-head">
+                <h3 id="registrationDirectoryTitle">Thêm mẫu cho người đã đăng ký</h3>
+                <button class="text-button" id="refreshRegistrationProfilesButton" type="button">Làm mới</button>
+              </div>
+              <p class="file-status" id="registrationDirectoryStatus" aria-live="polite">Đang tải danh sách...</p>
+              <div class="registration-profile-list" id="registrationProfilesList" aria-live="polite"></div>
+              <button class="text-button" id="clearRegistrationProfileButton" type="button" hidden>Đăng ký người mới</button>
+            </section>
             <div class="capture-options">
               <label class="file-button" for="registerUploadInput">Tải ảnh đăng ký<input id="registerUploadInput" type="file" accept="image/*" /></label>
               <button class="text-button" id="registerUseCameraButton" type="button" hidden>Dùng camera</button>
