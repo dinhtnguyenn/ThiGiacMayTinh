@@ -4,7 +4,14 @@ import unittest
 
 import numpy as np
 
-from server.face_service import FaceAnalysisError, FaceObservation, FaceQuality, InsightFaceService, validate_enrollment_quality
+from server.face_service import (
+    FaceAnalysisError,
+    FaceObservation,
+    FaceQuality,
+    InsightFaceService,
+    highest_embedding_similarity,
+    validate_enrollment_quality,
+)
 
 
 def observation(quality: FaceQuality) -> FaceObservation:
@@ -42,6 +49,32 @@ class FaceQualityTests(unittest.TestCase):
             self.validate(FaceQuality(180, 190, 0.95, 130, 20, 0.6))
 
         self.assertEqual(raised.exception.code, "image_too_blurry")
+
+
+class EmbeddingSimilarityTests(unittest.TestCase):
+    def test_returns_the_strongest_compatible_profile_sample(self) -> None:
+        candidate = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        same_person = np.array([0.9, 0.1, 0.0], dtype=np.float32)
+        other_person = np.array([0.0, 1.0, 0.0], dtype=np.float32)
+
+        similarity = highest_embedding_similarity(
+            candidate,
+            [(other_person.tobytes(), 3), (same_person.tobytes(), 3)],
+        )
+
+        self.assertIsNotNone(similarity)
+        assert similarity is not None
+        self.assertGreater(similarity, 0.99)
+
+    def test_ignores_incompatible_or_corrupt_embeddings(self) -> None:
+        candidate = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        similarity = highest_embedding_similarity(
+            candidate,
+            [(b"too-short", 3), (np.ones(4, dtype=np.float32).tobytes(), 4)],
+        )
+
+        self.assertIsNone(similarity)
 
 
 class FaceCropBoundsTests(unittest.TestCase):

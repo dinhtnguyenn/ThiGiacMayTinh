@@ -71,7 +71,6 @@
     closeDetailsButton: document.getElementById("closeDetailsButton"),
     detailsProfileSummary: document.getElementById("detailsProfileSummary"),
     detailsProfileFields: document.getElementById("detailsProfileFields"),
-    detailsImageStorage: document.getElementById("detailsImageStorage"),
     detailsSamples: document.getElementById("detailsSamples"),
   };
 
@@ -872,10 +871,8 @@
       } else {
         elements.personName.value = "";
       }
-      state.registrationUpload = null;
-      elements.registerUploadInput.value = "";
-      elements.registerUseCameraButton.hidden = !wasUploaded;
       clearRegistrationPreview();
+      if (wasUploaded) await restoreRegistrationCamera();
       renderRegistrationProfiles();
       void loadRegistrationProfiles();
       setMessage(
@@ -906,10 +903,9 @@
     elements.cancelRegistrationButton.disabled = true;
     try {
       await apiFetch("/api/registrations/" + encodeURIComponent(pending.id), { method: "DELETE" });
+      const wasUploaded = pending.source_mode === "upload";
       clearRegistrationPreview();
-      if (state.registrationUpload) {
-        showLocalPreview("register", elements.registerPreview, state.registrationUpload, "register");
-      }
+      if (wasUploaded) await restoreRegistrationCamera();
       setMessage(elements.registrationMessage, "Đã hủy. Không có dữ liệu nào được lưu vào CSDL.", "");
       setCameraStatus("register", "Đã hủy ảnh đăng ký.");
     } catch (error) {
@@ -974,6 +970,14 @@
     elements.registerUploadInput.value = "";
     elements.registerUseCameraButton.hidden = true;
     hidePreview(elements.registerPreview, "register");
+    await startCamera("register");
+  }
+
+  async function restoreRegistrationCamera() {
+    // Clear the upload state before returning to the default live camera.
+    state.registrationUpload = null;
+    elements.registerUploadInput.value = "";
+    elements.registerUseCameraButton.hidden = true;
     await startCamera("register");
   }
 
@@ -1113,7 +1117,7 @@
     }
   }
 
-  function lockManagement(message = "Đã khóa quản lý.") {
+  function lockManagement(message = "") {
     state.adminToken = null;
     state.profiles = [];
     elements.managementPanel.hidden = true;
@@ -1133,7 +1137,6 @@
   function clearDetails() {
     elements.detailsProfileSummary.textContent = "";
     elements.detailsProfileFields.replaceChildren();
-    elements.detailsImageStorage.textContent = "";
     elements.detailsSamples.replaceChildren();
   }
 
@@ -1150,17 +1153,9 @@
     addDetailField("Mã hồ sơ", profile.id || "Không xác định");
     addDetailField("Đăng ký", displayDate(profile.created_at));
     addDetailField("Nguồn", profile.source_mode || "Không xác định");
-    addDetailField("Kiểu lưu", "Ảnh khuôn mặt crop đã xác nhận trên server");
-    const imageStorage = payload.face_image_storage || {};
-    elements.detailsImageStorage.textContent = imageStorage.message || "Không có thông tin lưu ảnh.";
     samples.forEach((sample, index) => {
       const section = document.createElement("article");
       section.className = "detail-sample";
-      const heading = document.createElement("h3");
-      heading.textContent = "Mẫu " + (index + 1);
-      const metadata = document.createElement("p");
-      const quality = typeof sample.quality_score === "number" ? sample.quality_score.toFixed(3) : "Chưa có (mẫu cũ)";
-      metadata.textContent = "Mã mẫu: " + sample.id + " · " + displayDate(sample.created_at) + " · chất lượng: " + quality;
       let faceVisual;
       if (typeof sample.face_image === "string") {
         const image = document.createElement("img");
@@ -1176,11 +1171,13 @@
         faceVisual = unavailable;
       }
       const removeButton = document.createElement("button");
-      removeButton.className = "table-button";
+      removeButton.className = "sample-remove-button";
       removeButton.type = "button";
-      removeButton.textContent = "Xóa mẫu này";
+      removeButton.textContent = "×";
+      removeButton.title = "Xóa mẫu này";
+      removeButton.setAttribute("aria-label", "Xóa mẫu " + (index + 1) + " của " + profile.name);
       removeButton.addEventListener("click", () => deleteProfileSample(profile.id, sample.id));
-      section.append(heading, metadata, faceVisual, removeButton);
+      section.append(faceVisual, removeButton);
       elements.detailsSamples.append(section);
     });
   }
@@ -1199,15 +1196,19 @@
   }
 
   async function deleteProfileSample(profileId, sampleId) {
-    if (!window.confirm("Xóa mẫu khuôn mặt này? Không thể hoàn tác.")) return;
+    if (!window.confirm("Xóa mẫu này, gồm ảnh crop và dữ liệu nhận diện? Không thể hoàn tác.")) return;
     try {
       await apiFetch(
         "/api/profiles/" + encodeURIComponent(profileId) + "/samples/" + encodeURIComponent(sampleId),
         { admin: true, method: "DELETE" },
       );
-      closeDetailsDialog();
       await loadProfiles();
-      elements.managementSummary.textContent = "Đã xóa mẫu. Mở lại Chi tiết để xem dữ liệu mới.";
+      const details = await apiFetch(
+        "/api/profiles/" + encodeURIComponent(profileId) + "/details",
+        { admin: true, cache: "no-store" },
+      );
+      renderProfileDetails(details);
+      elements.managementSummary.textContent = "Đã xóa mẫu khuôn mặt và dữ liệu nhận diện tương ứng.";
     } catch (error) {
       elements.managementSummary.textContent = errorMessage(error);
     }

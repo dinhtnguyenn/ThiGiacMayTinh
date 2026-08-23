@@ -25,6 +25,7 @@ from .face_service import (
     FaceAnalysisTrace,
     FaceObservation,
     InsightFaceService,
+    highest_embedding_similarity,
     validate_enrollment_quality,
 )
 from .pending_registration import PendingRegistrationStore
@@ -210,23 +211,13 @@ def pending_registration_payload(pending) -> dict[str, object]:
 def profile_detail_payload(profile: StoredProfile) -> dict[str, object]:
     """Serialize consented sample images only for the administrator-only endpoint."""
 
-    stored_image_count = sum(1 for sample in profile.samples if sample.face_image)
-
     return {
         "profile": profile_payload(profile),
-        "face_image_storage": {
-            "stored_count": stored_image_count,
-            "message": (
-                f"Đang lưu {stored_image_count}/{len(profile.samples)} ảnh khuôn mặt crop đã xác nhận. "
-                "Ảnh gốc từ camera hoặc upload không được lưu."
-            ),
-        },
         "samples": [
             {
                 "id": sample.id,
                 "source_mode": sample.source_mode,
                 "created_at": as_iso(sample.created_at),
-                "quality_score": round(sample.quality_score, 3) if sample.quality_score is not None else None,
                 "face_image": (
                     "data:" + (sample.image_mime_type or "image/jpeg") + ";base64,"
                     + base64.b64encode(sample.face_image).decode("ascii")
@@ -260,6 +251,24 @@ def quality_payload(observation: FaceObservation) -> dict[str, object] | None:
         "sharpness": round(observation.quality.sharpness, 1),
         "score": round(observation.quality.score, 3),
     }
+
+
+def require_selected_profile_match(profile: StoredProfile, embedding: np.ndarray) -> float:
+    """Keep the public course-demo selector from accepting another person's sample."""
+
+    similarity = highest_embedding_similarity(
+        embedding,
+        ((sample.embedding, sample.embedding_dim) for sample in profile.samples),
+    )
+    if similarity is None:
+        api_error(409, "profile_has_no_compatible_samples", "Hồ sơ đã chọn không có mẫu hợp lệ để đối chiếu.")
+    if similarity < settings.selected_profile_match_threshold:
+        api_error(
+            422,
+            "selected_profile_mismatch",
+            "Khuôn mặt này không khớp với hồ sơ đã chọn. Hãy chọn đúng người hoặc đăng ký người mới.",
+        )
+    return similarity
 
 
 @app.on_event("startup")
@@ -412,12 +421,13 @@ async def create_registration_preview(
     if not clean_name:
         api_error(422, "invalid_name", "Tên hồ sơ không hợp lệ.")
     selected_profile_id = profile_id.strip() if profile_id else None
+    selected_profile: StoredProfile | None = None
     if selected_profile_id:
         workspace = database.public_workspace()
         selected_profile = database.profile_for_workspace(
             workspace.id,
             selected_profile_id,
-            include_embeddings=False,
+            include_embeddings=True,
         )
         if not selected_profile:
             api_error(404, "profile_not_found", "Hồ sơ đã chọn không còn tồn tại. Hãy tải lại danh sách.")
@@ -438,6 +448,14 @@ async def create_registration_preview(
         )
     except FaceAnalysisError as error:
         api_error(422, error.code, error.message)
+    if selected_profile:
+        similarity = require_selected_profile_match(selected_profile, observation.embedding)
+        processing_steps.append(
+            trace_step(
+                "Server",
+                f"Đã xác thực khuôn mặt khớp với hồ sơ đã chọn (similarity {similarity:.3f}).",
+            )
+        )
     preview_started = time.perf_counter()
     try:
         async with inference_semaphore:
@@ -488,7 +506,8 @@ async def confirm_registration(
     """Persist a one-time preview, rechecking a browser-adjusted crop when supplied."""
 
     request_started = time.perf_counter()
-    if not pending_registrations.peek(pending_id):
+    pending_preview = pending_registrations.peek(pending_id)
+    if not pending_preview:
         api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
 
     processing_steps: list[dict[str, object]] = []
@@ -521,10 +540,31 @@ async def confirm_registration(
         processing_steps.extend(crop_steps)
         processing_steps.append(trace_step("Server", "Đã kiểm tra và tạo ảnh crop đã điều chỉnh trước khi lưu."))
 
+    workspace = database.public_workspace()
+    candidate_embedding = (
+        embedding
+        if embedding is not None
+        else np.frombuffer(pending_preview.embedding, dtype=np.float32)
+    )
+    if pending_preview.profile_id:
+        selected_profile = database.profile_for_workspace(
+            workspace.id,
+            pending_preview.profile_id,
+            include_embeddings=True,
+        )
+        if not selected_profile:
+            api_error(404, "profile_not_found", "Hồ sơ đã chọn không còn tồn tại. Hãy tải lại danh sách.")
+        similarity = require_selected_profile_match(selected_profile, candidate_embedding)
+        processing_steps.append(
+            trace_step(
+                "Server",
+                f"Đã xác thực lại crop khớp với hồ sơ đã chọn (similarity {similarity:.3f}).",
+            )
+        )
+
     pending = pending_registrations.consume(pending_id)
     if not pending:
         api_error(404, "pending_registration_not_found", "Ảnh đăng ký đã hết hạn hoặc đã bị hủy. Hãy chụp lại.")
-    workspace = database.public_workspace()
     storage_started = time.perf_counter()
     try:
         enrollment = database.enroll_profile_sample(

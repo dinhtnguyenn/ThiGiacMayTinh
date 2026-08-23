@@ -6,6 +6,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from collections.abc import Iterable
 
 import numpy as np
 
@@ -48,6 +49,36 @@ class FaceAnalysisTrace:
     image_width: int
     image_height: int
     face_count: int
+
+
+def highest_embedding_similarity(
+    candidate: np.ndarray,
+    stored_embeddings: Iterable[tuple[bytes, int]],
+) -> float | None:
+    """Return the strongest cosine similarity for compatible stored embeddings."""
+
+    candidate_vector = np.asarray(candidate, dtype=np.float32)
+    if candidate_vector.ndim != 1 or not candidate_vector.size:
+        return None
+    candidate_norm = float(np.linalg.norm(candidate_vector))
+    if candidate_norm == 0:
+        return None
+    best: float | None = None
+    for stored_bytes, dimension in stored_embeddings:
+        if dimension != candidate_vector.size:
+            continue
+        try:
+            stored_vector = np.frombuffer(stored_bytes, dtype=np.float32)
+        except ValueError:
+            continue
+        if stored_vector.size != dimension:
+            continue
+        stored_norm = float(np.linalg.norm(stored_vector))
+        if stored_norm == 0:
+            continue
+        similarity = float(np.dot(stored_vector, candidate_vector) / (stored_norm * candidate_norm))
+        best = similarity if best is None else max(best, similarity)
+    return best
 
 
 def validate_enrollment_quality(

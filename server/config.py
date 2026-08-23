@@ -20,6 +20,7 @@ class Settings:
     detector_size: int
     retention_days: int
     match_threshold: float
+    selected_profile_match_threshold: float
     max_upload_bytes: int
     max_samples_per_profile: int
     min_face_size: int
@@ -49,6 +50,9 @@ class Settings:
             detector_size=int(os.getenv("FACEOPS_DETECTOR_SIZE", "512")),
             retention_days=int(os.getenv("FACEOPS_RETENTION_DAYS", "30")),
             match_threshold=float(os.getenv("FACEOPS_MATCH_THRESHOLD", "0.45")),
+            selected_profile_match_threshold=float(
+                os.getenv("FACEOPS_SELECTED_PROFILE_MATCH_THRESHOLD", "0.55")
+            ),
             max_upload_bytes=int(os.getenv("FACEOPS_MAX_UPLOAD_BYTES", str(8 * 1024 * 1024))),
             max_samples_per_profile=int(os.getenv("FACEOPS_MAX_SAMPLES_PER_PROFILE", "5")),
             min_face_size=int(os.getenv("FACEOPS_MIN_FACE_SIZE", "96")),
@@ -78,6 +82,11 @@ class Settings:
             raise RuntimeError("FACEOPS_RETENTION_DAYS must be at least one day.")
         if not 0 < self.match_threshold < 1:
             raise RuntimeError("FACEOPS_MATCH_THRESHOLD must be between 0 and 1.")
+        if not self.match_threshold <= self.selected_profile_match_threshold < 1:
+            raise RuntimeError(
+                "FACEOPS_SELECTED_PROFILE_MATCH_THRESHOLD must be between "
+                "FACEOPS_MATCH_THRESHOLD and 1."
+            )
         if self.detector_size < 256 or self.detector_size > 640 or self.detector_size % 32:
             raise RuntimeError("FACEOPS_DETECTOR_SIZE must be a multiple of 32 between 256 and 640.")
         if self.max_samples_per_profile < 1:

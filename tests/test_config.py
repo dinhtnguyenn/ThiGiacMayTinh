@@ -39,5 +39,15 @@ class SettingsTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "FACEOPS_PENDING_REGISTRATION_TTL_SECONDS"):
             settings.validate_for_startup()
 
+    def test_selected_profile_threshold_cannot_be_weaker_than_recognition_threshold(self) -> None:
+        settings = replace(
+            Settings.from_environment(),
+            match_threshold=0.6,
+            selected_profile_match_threshold=0.59,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "FACEOPS_SELECTED_PROFILE_MATCH_THRESHOLD"):
+            settings.validate_for_startup()
+
 if __name__ == "__main__":
     unittest.main()
