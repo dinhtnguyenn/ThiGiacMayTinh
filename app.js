@@ -53,9 +53,6 @@
     unlockManagementButton: document.getElementById("unlockManagementButton"),
     managementMessage: document.getElementById("managementMessage"),
     managementSummary: document.getElementById("managementSummary"),
-    calibrateThresholdButton: document.getElementById("calibrateThresholdButton"),
-    calibrationPanel: document.getElementById("calibrationPanel"),
-    calibrationResult: document.getElementById("calibrationResult"),
     refreshDataButton: document.getElementById("refreshDataButton"),
     lockManagementButton: document.getElementById("lockManagementButton"),
     profilesTable: document.getElementById("profilesTable"),
@@ -1104,23 +1101,6 @@
     }
   }
 
-  async function calibrateThreshold() {
-    setButtonState(elements.calibrateThresholdButton, "loading", "Đang tính...");
-    try {
-      const report = await apiFetch("/api/calibration", { admin: true, cache: "no-store" });
-      elements.calibrationPanel.open = true;
-      const counts = report.genuine_pairs + " cặp cùng người, " + report.impostor_pairs + " cặp khác người.";
-      elements.calibrationResult.textContent = report.ready
-        ? counts + " Ngưỡng hiện tại: " + report.current_threshold + ". Gợi ý: " + report.recommended_threshold
-          + " (FAR ước lượng: " + report.estimated_far + ", FRR: " + report.estimated_frr + "). " + report.notice
-        : counts + " " + report.notice;
-      setButtonState(elements.calibrateThresholdButton, "success", "Đã tính");
-    } catch (error) {
-      elements.calibrationResult.textContent = errorMessage(error);
-      setButtonState(elements.calibrateThresholdButton, "error", "Thử lại");
-    }
-  }
-
   async function unlockManagement(event) {
     event.preventDefault();
     const token = elements.adminTokenInput.value;
@@ -1368,7 +1348,6 @@
   elements.recognizeUseCameraButton.addEventListener("click", useRecognitionCamera);
   elements.adminForm.addEventListener("submit", unlockManagement);
   elements.refreshDataButton.addEventListener("click", loadProfiles);
-  elements.calibrateThresholdButton.addEventListener("click", calibrateThreshold);
   elements.lockManagementButton.addEventListener("click", () => lockManagement());
   elements.profilesTable.addEventListener("click", (event) => {
     const button = event.target.closest("[data-action]");

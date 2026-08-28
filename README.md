@@ -97,7 +97,7 @@ The application is deployable as a single container, but a public biometric serv
 
 - `FACEOPS_DETECTOR_SIZE=512` is the balanced CPU default for an enrolled face near the camera; it reduces detector work substantially compared with 640 px. Use `640` only when tests show that the deployment needs to detect smaller or more distant faces.
 - `FACEOPS_MAX_CONCURRENT_INFERENCES=1` is the safe CPU default. It prevents several public requests from competing for the same InsightFace runtime and making every camera stream slow. Increase it only after measuring the server's CPU/GPU under real load.
-- `FACEOPS_CALIBRATION_MAX_PAIRS=20000` bounds the work of the administrator-only threshold diagnostic. The normal recognition path uses one NumPy matrix multiplication for all compatible stored samples instead of a Python loop per sample.
+- The normal recognition path uses one NumPy matrix multiplication for all compatible stored samples instead of a Python loop per sample.
 
 ### Scale-out note
 
@@ -117,7 +117,6 @@ The included SQLite database and local Docker volumes are intentionally simple a
 | `GET /api/profiles/{profile_id}/details` | Returns one profile's sample metadata and confirmed face crops for an administrator only. Requires `X-Admin-Token`; source camera/upload images are never returned. |
 | `PUT /api/profiles/{profile_id}` | Renames one shared profile for an administrator only. Requires `X-Admin-Token`. |
 | `DELETE /api/profiles/{profile_id}` | Deletes one shared profile for an administrator only. Requires `X-Admin-Token`. |
-| `GET /api/calibration` | Calculates a non-destructive threshold diagnostic from stored samples for an administrator only. Requires `X-Admin-Token`. |
 | `DELETE /api/profiles/{profile_id}/samples/{sample_id}` | Deletes one enrollment sample for an administrator only. Deleting the final sample also deletes its profile. Requires `X-Admin-Token`. |
 | `POST /api/workspaces`, `DELETE /api/workspaces/current` | Retained only for older controlled integrations; they are not used by the public UI. |
 

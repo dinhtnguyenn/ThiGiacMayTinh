@@ -17,7 +17,6 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
-from .calibration import threshold_report
 from .config import Settings
 from .database import Database, EnrollmentTargetNotFoundError, StoredProfile, Workspace
 from .face_service import (
@@ -328,16 +327,6 @@ async def list_registration_profiles() -> dict[str, object]:
             for profile in profiles
         ],
     }
-
-
-@app.get("/api/calibration")
-async def calibration_report(
-    _: Annotated[None, Depends(require_admin)],
-) -> dict[str, object]:
-    """Calculate an on-demand threshold diagnostic; never changes production config."""
-
-    profiles = database.profiles_for_public_directory(include_embeddings=True)
-    return threshold_report(profiles, settings.match_threshold, settings.calibration_max_pairs)
 
 
 @app.get("/api/profiles/{profile_id}/details")
