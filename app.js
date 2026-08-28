@@ -72,6 +72,11 @@
     detailsProfileSummary: document.getElementById("detailsProfileSummary"),
     detailsProfileFields: document.getElementById("detailsProfileFields"),
     detailsSamples: document.getElementById("detailsSamples"),
+    confirmationDialog: document.getElementById("confirmationDialog"),
+    confirmationDialogTitle: document.getElementById("confirmationDialogTitle"),
+    confirmationDialogMessage: document.getElementById("confirmationDialogMessage"),
+    cancelConfirmationButton: document.getElementById("cancelConfirmationButton"),
+    acceptConfirmationButton: document.getElementById("acceptConfirmationButton"),
   };
 
   const state = {
@@ -95,6 +100,7 @@
     recognitionUpload: null,
     previewUrls: new Map(),
     cropEditor: null,
+    confirmationResolver: null,
   };
 
   const REQUIRED_RECOGNITION_CONFIRMATIONS = 2;
@@ -104,6 +110,25 @@
 
   function errorMessage(error) {
     return error instanceof Error ? error.message : "Không thể hoàn tất thao tác.";
+  }
+
+  function closeConfirmationDialog(confirmed) {
+    const resolve = state.confirmationResolver;
+    state.confirmationResolver = null;
+    if (elements.confirmationDialog.open) elements.confirmationDialog.close();
+    if (resolve) resolve(confirmed);
+  }
+
+  function requestConfirmation({ title, message, confirmLabel = "Xác nhận" }) {
+    if (state.confirmationResolver || elements.confirmationDialog.open) return Promise.resolve(false);
+    elements.confirmationDialogTitle.textContent = title;
+    elements.confirmationDialogMessage.textContent = message;
+    elements.acceptConfirmationButton.textContent = confirmLabel;
+    elements.confirmationDialog.showModal();
+    elements.cancelConfirmationButton.focus();
+    return new Promise((resolve) => {
+      state.confirmationResolver = resolve;
+    });
   }
 
   function enrollmentKey(name) {
@@ -1029,6 +1054,7 @@
     elements.profilesTableBody.replaceChildren();
     const row = document.createElement("tr");
     const cell = document.createElement("td");
+    cell.className = "table-empty-message";
     cell.colSpan = 4;
     cell.textContent = message;
     row.append(cell);
@@ -1199,7 +1225,12 @@
     const confirmation = isLastSample
       ? "Đây là mẫu cuối cùng. Xóa ảnh này sẽ xóa toàn bộ hồ sơ và dữ liệu nhận diện của người này. Không thể hoàn tác."
       : "Xóa mẫu này, gồm ảnh crop và dữ liệu nhận diện? Không thể hoàn tác.";
-    if (!window.confirm(confirmation)) return;
+    const confirmed = await requestConfirmation({
+      title: isLastSample ? "Xóa hồ sơ?" : "Xóa ảnh mẫu?",
+      message: confirmation,
+      confirmLabel: isLastSample ? "Xóa hồ sơ" : "Xóa ảnh",
+    });
+    if (!confirmed) return;
     try {
       await apiFetch(
         "/api/profiles/" + encodeURIComponent(profileId) + "/samples/" + encodeURIComponent(sampleId),
@@ -1254,7 +1285,13 @@
 
   async function deleteProfile(profileId) {
     const profile = state.profiles.find((item) => item.id === profileId);
-    if (!profile || !window.confirm("Xóa hồ sơ " + profile.name + "?")) return;
+    if (!profile) return;
+    const confirmed = await requestConfirmation({
+      title: "Xóa hồ sơ?",
+      message: "Xóa hồ sơ " + profile.name + " cùng toàn bộ ảnh mẫu và dữ liệu nhận diện? Không thể hoàn tác.",
+      confirmLabel: "Xóa hồ sơ",
+    });
+    if (!confirmed) return;
     try {
       await apiFetch("/api/profiles/" + encodeURIComponent(profileId), { admin: true, method: "DELETE" });
       await loadProfiles();
@@ -1344,6 +1381,15 @@
   elements.cancelEditButton.addEventListener("click", () => elements.editDialog.close());
   elements.closeDetailsButton.addEventListener("click", closeDetailsDialog);
   elements.detailsDialog.addEventListener("cancel", () => window.setTimeout(clearDetails, 0));
+  elements.cancelConfirmationButton.addEventListener("click", () => closeConfirmationDialog(false));
+  elements.acceptConfirmationButton.addEventListener("click", () => closeConfirmationDialog(true));
+  elements.confirmationDialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    closeConfirmationDialog(false);
+  });
+  elements.confirmationDialog.addEventListener("close", () => {
+    if (state.confirmationResolver) closeConfirmationDialog(false);
+  });
   window.addEventListener("resize", renderCropSelection);
   window.addEventListener("beforeunload", stopCamera);
 
