@@ -1093,7 +1093,7 @@
     try {
       const payload = await apiFetch("/api/profiles", { admin: true, cache: "no-store" });
       state.profiles = Array.isArray(payload.profiles) ? payload.profiles : [];
-      elements.managementSummary.textContent = payload.profile_count + " hồ sơ trên server.";
+      elements.managementSummary.textContent = payload.profile_count + " hồ sơ.";
       renderProfiles();
     } catch (error) {
       setTableMessage(errorMessage(error));
