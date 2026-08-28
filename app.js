@@ -1206,6 +1206,8 @@
         { admin: true, method: "DELETE" },
       );
       await loadProfiles();
+      // Keep the public add-sample selector in sync when a profile disappears.
+      await loadRegistrationProfiles();
       if (!state.profiles.some((profile) => profile.id === profileId)) {
         closeDetailsDialog();
         setMessage(elements.managementMessage, "Đã xóa mẫu cuối cùng và toàn bộ hồ sơ.", "success");
