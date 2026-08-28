@@ -1176,7 +1176,7 @@
       removeButton.textContent = "×";
       removeButton.title = "Xóa mẫu này";
       removeButton.setAttribute("aria-label", "Xóa mẫu " + (index + 1) + " của " + profile.name);
-      removeButton.addEventListener("click", () => deleteProfileSample(profile.id, sample.id));
+      removeButton.addEventListener("click", () => deleteProfileSample(profile.id, sample.id, samples.length === 1));
       section.append(faceVisual, removeButton);
       elements.detailsSamples.append(section);
     });
@@ -1195,14 +1195,22 @@
     }
   }
 
-  async function deleteProfileSample(profileId, sampleId) {
-    if (!window.confirm("Xóa mẫu này, gồm ảnh crop và dữ liệu nhận diện? Không thể hoàn tác.")) return;
+  async function deleteProfileSample(profileId, sampleId, isLastSample) {
+    const confirmation = isLastSample
+      ? "Đây là mẫu cuối cùng. Xóa ảnh này sẽ xóa toàn bộ hồ sơ và dữ liệu nhận diện của người này. Không thể hoàn tác."
+      : "Xóa mẫu này, gồm ảnh crop và dữ liệu nhận diện? Không thể hoàn tác.";
+    if (!window.confirm(confirmation)) return;
     try {
       await apiFetch(
         "/api/profiles/" + encodeURIComponent(profileId) + "/samples/" + encodeURIComponent(sampleId),
         { admin: true, method: "DELETE" },
       );
       await loadProfiles();
+      if (!state.profiles.some((profile) => profile.id === profileId)) {
+        closeDetailsDialog();
+        setMessage(elements.managementMessage, "Đã xóa mẫu cuối cùng và toàn bộ hồ sơ.", "success");
+        return;
+      }
       const details = await apiFetch(
         "/api/profiles/" + encodeURIComponent(profileId) + "/details",
         { admin: true, cache: "no-store" },

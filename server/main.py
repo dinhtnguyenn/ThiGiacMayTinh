@@ -376,14 +376,12 @@ async def delete_profile_sample(
     sample_id: str,
     _: Annotated[None, Depends(require_admin)],
 ) -> Response:
-    """Let an administrator discard a poor capture without deleting the identity."""
+    """Let an administrator discard a capture and remove an empty profile safely."""
 
     workspace = database.public_workspace()
     result = database.delete_profile_sample(workspace.id, profile_id, sample_id)
     if result == "not_found":
         api_error(404, "sample_not_found", "Mẫu khuôn mặt không tồn tại.")
-    if result == "last_sample":
-        api_error(409, "last_sample_protected", "Không thể xóa mẫu cuối cùng. Hãy xóa cả hồ sơ nếu cần.")
     return Response(status_code=204)
 
 class ProfileUpdateRequest(BaseModel):
@@ -532,17 +530,19 @@ async def confirm_registration(
         embedding_dim = int(observation.embedding.size)
         quality_score = quality.score
         try:
-            face_image = await run_in_threadpool(face_service.crop_face_preview, image_bytes, observation)
+            face_image = await run_in_threadpool(face_service.aligned_face_preview, image_bytes, observation)
         except FaceAnalysisError as error:
             api_error(422, error.code, error.message)
         except RuntimeError:
-            api_error(503, "preview_unavailable", "Không thể tạo ảnh crop để lưu. Hãy thử lại sau.")
+            api_error(503, "alignment_unavailable", "Không thể căn chỉnh ảnh khuôn mặt để lưu. Hãy thử lại sau.")
         processing_steps.extend(crop_steps)
-        processing_steps.append(trace_step("Server", "Đã kiểm tra và tạo ảnh crop đã điều chỉnh trước khi lưu."))
+        processing_steps.append(
+            trace_step("Server", "Đã kiểm tra, xoay thẳng và tạo ảnh crop chuẩn 112x112 trước khi lưu.")
+        )
 
     workspace = database.public_workspace()
     candidate_embedding = (
-        embedding
+        np.frombuffer(embedding, dtype=np.float32)
         if embedding is not None
         else np.frombuffer(pending_preview.embedding, dtype=np.float32)
     )

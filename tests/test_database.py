@@ -216,7 +216,7 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(len(profiles), 1)
             self.assertEqual(len(profiles[0].samples), 1)
 
-    def test_administrator_can_remove_one_sample_but_not_the_last_sample(self) -> None:
+    def test_administrator_can_remove_one_sample_or_the_final_profile_sample(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             database = self.create_database(directory)
             workspace = database.public_workspace()
@@ -238,8 +238,9 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(len(remaining.samples), 1)
             self.assertEqual(
                 database.delete_profile_sample(workspace.id, remaining.id, remaining.samples[0].id),
-                "last_sample",
+                "profile_deleted",
             )
+            self.assertIsNone(database.profile_for_workspace(workspace.id, remaining.id, include_embeddings=True))
 
 
 if __name__ == "__main__":

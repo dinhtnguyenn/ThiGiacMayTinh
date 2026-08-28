@@ -567,7 +567,7 @@ class Database:
         return result.rowcount == 1
 
     def delete_profile_sample(self, workspace_id: str, profile_id: str, sample_id: str) -> str:
-        """Remove one bad capture while preserving a usable identity template."""
+        """Remove one capture, deleting its now-empty profile with the final sample."""
 
         with self.connection() as connection:
             sample = connection.execute(
@@ -585,7 +585,13 @@ class Database:
                 (profile_id,),
             ).fetchone()[0]
             if sample_count <= 1:
-                return "last_sample"
+                # The profile embedding mirrors its first sample, so retaining it
+                # would leave a deleted face searchable after its last crop is gone.
+                connection.execute(
+                    "DELETE FROM face_profiles WHERE id = ? AND workspace_id = ?",
+                    (profile_id, workspace_id),
+                )
+                return "profile_deleted"
             connection.execute("DELETE FROM face_profile_samples WHERE id = ?", (sample_id,))
         return "deleted"
 

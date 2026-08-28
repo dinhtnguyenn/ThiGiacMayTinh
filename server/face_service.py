@@ -52,12 +52,20 @@ class FaceAnalysisTrace:
 
 
 def highest_embedding_similarity(
-    candidate: np.ndarray,
+    candidate: np.ndarray | bytes | bytearray | memoryview,
     stored_embeddings: Iterable[tuple[bytes, int]],
 ) -> float | None:
     """Return the strongest cosine similarity for compatible stored embeddings."""
 
-    candidate_vector = np.asarray(candidate, dtype=np.float32)
+    # Serialized candidate embeddings use raw float32 bytes at the API boundary.
+    try:
+        candidate_vector = (
+            np.frombuffer(candidate, dtype=np.float32)
+            if isinstance(candidate, (bytes, bytearray, memoryview))
+            else np.asarray(candidate, dtype=np.float32)
+        )
+    except (TypeError, ValueError):
+        return None
     if candidate_vector.ndim != 1 or not candidate_vector.size:
         return None
     candidate_norm = float(np.linalg.norm(candidate_vector))
@@ -280,6 +288,32 @@ class InsightFaceService:
         encoded, preview = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
         if not encoded:
             raise FaceAnalysisError("preview_unavailable", "Không thể tạo ảnh xem trước khuôn mặt.")
+        return preview.tobytes()
+
+    @staticmethod
+    def aligned_face_preview(image_bytes: bytes, observation: FaceObservation) -> bytes:
+        """Encode a normalized 112px crop rotated by InsightFace landmarks for storage."""
+
+        try:
+            import cv2
+            from insightface.utils import face_align
+        except ImportError as error:
+            raise RuntimeError("InsightFace and OpenCV are required for face alignment.") from error
+        keypoints = np.asarray(observation.keypoints, dtype=np.float32)
+        if keypoints.shape[0] < 5 or keypoints.shape[1:] != (2,) or not np.isfinite(keypoints[:5]).all():
+            raise FaceAnalysisError("alignment_unavailable", "Không đủ landmark để căn chỉnh khuôn mặt.")
+        image = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if image is None:
+            raise FaceAnalysisError("invalid_image", "Tệp không phải một ảnh hợp lệ.")
+        try:
+            aligned = face_align.norm_crop(image, keypoints[:5], image_size=112)
+        except (TypeError, ValueError, cv2.error) as error:
+            raise FaceAnalysisError("alignment_unavailable", "Không thể căn chỉnh ảnh khuôn mặt.") from error
+        if aligned is None or aligned.size == 0:
+            raise FaceAnalysisError("alignment_unavailable", "Không thể căn chỉnh ảnh khuôn mặt.")
+        encoded, preview = cv2.imencode(".jpg", aligned, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if not encoded:
+            raise FaceAnalysisError("alignment_unavailable", "Không thể mã hóa ảnh khuôn mặt đã căn chỉnh.")
         return preview.tobytes()
 
     @staticmethod

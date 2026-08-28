@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
+import types
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -76,6 +79,22 @@ class EmbeddingSimilarityTests(unittest.TestCase):
 
         self.assertIsNone(similarity)
 
+    def test_accepts_a_serialized_candidate_from_an_adjusted_registration_crop(self) -> None:
+        candidate = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        stored_sample = np.array([0.95, 0.05, 0.0], dtype=np.float32)
+
+        similarity = highest_embedding_similarity(
+            candidate.tobytes(),
+            [(stored_sample.tobytes(), 3)],
+        )
+
+        self.assertIsNotNone(similarity)
+        assert similarity is not None
+        self.assertGreater(similarity, 0.99)
+
+    def test_returns_none_for_a_malformed_serialized_candidate(self) -> None:
+        self.assertIsNone(highest_embedding_similarity(b"bad", []))
+
 
 class FaceCropBoundsTests(unittest.TestCase):
     def test_adds_adjustment_room_around_the_detected_face(self) -> None:
@@ -113,6 +132,44 @@ class FaceCropBoundsTests(unittest.TestCase):
         self.assertEqual(selection["y"], 0.0)
         self.assertGreaterEqual(selection["width"], 100 / 135)
         self.assertGreaterEqual(selection["height"], 100 / 135)
+
+
+class FaceAlignmentTests(unittest.TestCase):
+    def test_creates_a_standardized_crop_from_five_landmarks(self) -> None:
+        received: dict[str, object] = {}
+
+        def norm_crop(image, landmarks, image_size):
+            received["image"] = image
+            received["landmarks"] = landmarks
+            received["image_size"] = image_size
+            return np.full((112, 112, 3), 127, dtype=np.uint8)
+
+        fake_cv2 = types.SimpleNamespace(
+            IMREAD_COLOR=1,
+            IMWRITE_JPEG_QUALITY=2,
+            error=RuntimeError,
+            imdecode=lambda encoded, mode: np.zeros((200, 200, 3), dtype=np.uint8),
+            imencode=lambda extension, image, options: (True, np.array([1, 2, 3], dtype=np.uint8)),
+        )
+        fake_face_align = types.SimpleNamespace(norm_crop=norm_crop)
+        fake_utils = types.ModuleType("insightface.utils")
+        fake_utils.face_align = fake_face_align
+        fake_insightface = types.ModuleType("insightface")
+        fake_insightface.utils = fake_utils
+        detected_face = FaceObservation(
+            embedding=np.ones(4, dtype=np.float32),
+            keypoints=np.array([[50, 60], [150, 60], [100, 100], [65, 145], [135, 145]], dtype=np.float32),
+        )
+
+        with patch.dict(
+            sys.modules,
+            {"cv2": fake_cv2, "insightface": fake_insightface, "insightface.utils": fake_utils},
+        ):
+            aligned = InsightFaceService.aligned_face_preview(b"source-image", detected_face)
+
+        self.assertEqual(aligned, b"\x01\x02\x03")
+        self.assertEqual(received["image_size"], 112)
+        self.assertTrue(np.array_equal(received["landmarks"], detected_face.keypoints))
 
 
 if __name__ == "__main__":
